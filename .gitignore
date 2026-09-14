@@ -1,0 +1,21 @@
+# Local Python environment
+venv/
+.venv/
+
+# Python cache and tooling files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# YOLO model weights and exported models
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Generated detection results (keep the folder itself)
+outputs/*
+!outputs/.gitkeep
+
+# macOS
+.DS_Store
