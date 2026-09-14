@@ -4,6 +4,7 @@ from argparse import ArgumentParser
 from pathlib import Path
 
 import cv2
+import numpy as np
 from ultralytics import YOLO
 
 
@@ -11,40 +12,98 @@ from ultralytics import YOLO
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".m4v"}
 
+# Predefined queue-zone corners written as fractions of frame width and height.
+# Using fractions keeps the same zone shape for images and videos of any size.
+# Change these four points later to match the camera view at the real location.
+QUEUE_ZONE_POINTS = (
+    (0.28, 0.35),  # top-left
+    (0.62, 0.35),  # top-right
+    (0.72, 0.95),  # bottom-right
+    (0.18, 0.95),  # bottom-left
+)
 
-def draw_people(frame, result) -> int:
-    """Draw every detected person and return the number of people."""
-    person_count = len(result.boxes)
+
+def draw_queue_zone(frame) -> np.ndarray:
+    """Draw the predefined queue zone and return its pixel coordinates."""
+    height, width = frame.shape[:2]
+    zone = np.array(
+        [(int(x * width), int(y * height)) for x, y in QUEUE_ZONE_POINTS],
+        dtype=np.int32,
+    )
+
+    # Draw a transparent orange fill so the video remains visible underneath.
+    overlay = frame.copy()
+    cv2.fillPoly(overlay, [zone], (0, 165, 255))
+    cv2.addWeighted(overlay, 0.18, frame, 0.82, 0, frame)
+    cv2.polylines(frame, [zone], True, (0, 165, 255), 3)
+    cv2.putText(
+        frame,
+        "QUEUE ZONE",
+        tuple(zone[0]),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (0, 120, 255),
+        2,
+    )
+    return zone
+
+
+def draw_people_and_counts(frame, result, queue_zone) -> tuple[int, int]:
+    """Draw detected people and return total and in-queue counts."""
+    total_count = len(result.boxes)
+    queue_count = 0
 
     for box in result.boxes:
         # xyxy contains the top-left and bottom-right box coordinates.
         x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
         confidence = float(box.conf[0])
 
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 0), 2)
+        # A person belongs to the queue only when the center of their bounding
+        # box is inside (or exactly on the edge of) the queue polygon.
+        center = ((x1 + x2) // 2, (y1 + y2) // 2)
+        is_in_queue = cv2.pointPolygonTest(queue_zone, center, False) >= 0
+
+        if is_in_queue:
+            queue_count += 1
+            color = (0, 200, 0)  # Green: inside the queue.
+            status = "IN QUEUE"
+        else:
+            color = (0, 0, 255)  # Red: outside the queue.
+            status = "OUTSIDE"
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        cv2.circle(frame, center, 5, color, -1)
         cv2.putText(
             frame,
-            f"Person {confidence:.2f}",
+            f"{status} {confidence:.2f}",
             (x1, max(y1 - 10, 20)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
-            (0, 200, 0),
+            color,
             2,
         )
 
-    # A filled background keeps the total readable on light and dark frames.
-    label = f"People detected: {person_count}"
-    cv2.rectangle(frame, (10, 10), (310, 50), (0, 0, 0), -1)
+    # A filled background keeps both counts readable on light and dark frames.
+    cv2.rectangle(frame, (10, 10), (300, 85), (0, 0, 0), -1)
     cv2.putText(
         frame,
-        label,
+        f"Total People: {total_count}",
         (20, 38),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
+        0.7,
         (255, 255, 255),
         2,
     )
-    return person_count
+    cv2.putText(
+        frame,
+        f"Queue Count: {queue_count}",
+        (20, 72),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 200, 0),
+        2,
+    )
+    return total_count, queue_count
 
 
 def detect_image(model, input_path: Path, output_path: Path, display: bool) -> None:
@@ -55,12 +114,14 @@ def detect_image(model, input_path: Path, output_path: Path, display: bool) -> N
 
     # COCO class 0 is "person", so other object classes are ignored.
     result = model.predict(frame, classes=[0], verbose=False)[0]
-    count = draw_people(frame, result)
+    queue_zone = draw_queue_zone(frame)
+    total_count, queue_count = draw_people_and_counts(frame, result, queue_zone)
 
     if not cv2.imwrite(str(output_path), frame):
         raise RuntimeError(f"Could not save the output image: {output_path}")
 
-    print(f"People detected: {count}")
+    print(f"Total People: {total_count}")
+    print(f"Queue Count: {queue_count}")
     print(f"Saved result to: {output_path}")
 
     if display:
@@ -97,11 +158,19 @@ def detect_video(model, input_path: Path, output_path: Path, display: bool) -> N
                 break
 
             result = model.predict(frame, classes=[0], verbose=False)[0]
-            count = draw_people(frame, result)
+            queue_zone = draw_queue_zone(frame)
+            total_count, queue_count = draw_people_and_counts(
+                frame, result, queue_zone
+            )
             writer.write(frame)
             frame_number += 1
 
-            print(f"\rFrame {frame_number}: {count} people", end="", flush=True)
+            print(
+                f"\rFrame {frame_number}: {total_count} total, "
+                f"{queue_count} in queue",
+                end="",
+                flush=True,
+            )
 
             if display:
                 cv2.imshow("QueueVision - press q to stop", frame)
