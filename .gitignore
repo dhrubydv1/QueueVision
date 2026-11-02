@@ -7,15 +7,35 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
+# Environment files (keep the example)
+.env
+.env.*
+!.env.example
+
 # YOLO model weights and exported models
 *.pt
 *.pth
 *.onnx
 *.engine
+*.mlpackage/
 
-# Generated detection results (keep the folder itself)
-outputs/*
+# Datasets: keep folder structure and README only
+datasets/raw/*
+datasets/processed/*
+datasets/annotations/*
+!datasets/*/.gitkeep
+
+# Generated results: keep folder structure only
+outputs/**
+!outputs/
 !outputs/.gitkeep
+!outputs/*/
+!outputs/*/.gitkeep
+
+# Legacy prototype media folder
+media/*
+!media/.gitkeep
 
 # macOS
 .DS_Store
+._*
