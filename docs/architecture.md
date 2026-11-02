@@ -1,97 +1,192 @@
-# QueueVision Architecture (Sprint 1)
+# QueueVision Architecture (Sprint 2)
 
 ## Data flow
 
 ```
-                         ┌─────────────────────────────────────────────┐
-                         │ run_tracking.py (CLI / process_video)       │
-                         └─────────────────────────────────────────────┘
-                                             │
-   ┌─────────────┐  frame (BGR ndarray)  ┌────▼──────────────┐ list[PersonDetection]
-   │ VideoLoader │ ─────────────────────►│  PersonTracker    │─────────────────────┐
-   │  (OpenCV)   │                       │  ByteTrack state  │                     │
-   └─────────────┘                       │        │          │                     ▼
-         │ VideoMetadata                 │  PersonDetector   │          ┌──────────────────────┐
-         │ (w, h, fps, frames)           │  YOLO11n (loaded  │          │ visualization        │
-         │                               │  once, MPS/CPU)   │          │ draw_people          │
-         │                               └────────┬──────────┘          │ draw_metrics_panel   │
-         │                                        │ inference seconds   └──────────┬───────────┘
-         │                               ┌────────▼──────────┐                     │ annotated frame
-         │                               │ PerformanceTracker│◄── frame seconds ───┤
-         │                               └────────┬──────────┘                     ▼
-         │                                        │ report            ┌──────────────────────┐
-         └───────────────────────────────────────►│                   │ VideoWriter (mp4v)   │
-                                         save_json▼                   └──────────┬───────────┘
-                               outputs/metrics/<name>_metrics.json     outputs/videos/<name>_tracked.mp4
+ source (file / webcam)
+        │
+ ┌──────▼──────┐  frames   ┌─────────────────────────────────────────────┐
+ │ VideoLoader │──────────►│ pipeline.iter_frame_results()  (generator)  │
+ │  (OpenCV)   │ skip()    │                                             │
+ └─────────────┘           │  PersonTracker ── PersonDetector (YOLO/CoreML)
+                           │   ByteTrack settings from TrackerSettings   │
+                           │        │ list[PersonDetection]              │
+                           │  QueueAnalyzer  (only with a camera config) │
+                           │   QueueZone · QueueMembershipTracker        │
+                           │   QueueLengthEstimator                      │
+                           └──────────────────┬──────────────────────────┘
+                                              │ FrameResult
+          ┌───────────────────────────────────┴──────────────────────────────────┐
+          │ run_tracking.process_video (one consumer; Sprint 4 API is another)    │
+          │  blur_heads → draw_queue_zone → draw_people → draw_metrics_panel      │
+          │  → VideoWriter → ffmpeg H.264                                         │
+          │  PerformanceTracker → *_metrics.json                                  │
+          │  MotWriter → tracks/*_mot.txt                                         │
+          │  QueueTimeSeriesWriter, ZoneEventWriter → timeseries/*.csv, events/*.csv
+          └───────────────────────────────────────────────────────────────────────┘
+
+ Offline:  evaluate_tracking.py  (mot_eval)  ◄── tracks/*_mot.txt + MOT17 gt
+           evaluate_queue.py     (queue_eval) ◄── timeseries/*_queue.csv + manual counts
 ```
+
+## Data contracts
+
+### `PersonDetection` (`ai_engine/detection/types.py`)
+Frozen dataclass: `bbox (x1, y1, x2, y2)`, `confidence`, optional `track_id`.
+It lives in its own module with no model imports, so queue and evaluation
+code can use it without torch or ultralytics. IDs are per-video ByteTrack
+integers, not identities.
+
+### `FrameResult` (`ai_engine/pipeline.py`)
+Frozen dataclass yielded once per processed frame:
+
+| Field | Meaning |
+|---|---|
+| `frame_index` | Source frame index (0-based, counts skipped frames) |
+| `timestamp_s` | Video time, `frame_index / source FPS` |
+| `frame` | Original BGR image; consumers may draw on it |
+| `people` | `list[PersonDetection]`, tracked people only |
+| `queue` | `QueueFrameState` or `None` when no camera config is used |
+| `inference_seconds` | Detection + tracking time for this frame |
+| `started_at` | `perf_counter()` when work on the frame began (including skipping and decoding), so a consumer can compute full processing time |
+
+### `QueueFrameState` (`ai_engine/queue/analyzer.py`)
+Frozen dataclass: `raw_count` (confirmed members, including those briefly
+occluded within the grace period), `queue_length` (median of `raw_count`
+over `smoothing.window_seconds`), `statuses` (`track_id -> MemberStatus`:
+`candidate`, `in_queue`, `left`) and `events` (tuple of `ZoneEvent` produced
+by this frame).
+
+### `ZoneEvent` (`ai_engine/queue/membership.py`)
+Frozen dataclass: `event_type`, `track_id`, `timestamp_s`, `frame_index`,
+`zone_entered_s`.
+
+| Event | Fires when | `timestamp_s` |
+|---|---|---|
+| `zone_enter` | Membership is confirmed (dwell and speed rules met) | Confirmation time |
+| `zone_exit` | A confirmed member has been outside the zone for longer than `exit_grace_seconds` | Last time seen inside the zone |
+
+`zone_entered_s` is when the person first stepped into the zone and is the
+value Sprint 3 should use as the queue-join time. Only confirmed members
+produce events; people walking through produce none. Nothing is emitted at
+the end of a video; the number of members still queued appears in the
+metrics JSON as `queue.members_still_in_queue_at_end`.
 
 ## Components
 
-### Video loader (`ai_engine/video/video_loader.py`)
-`VideoLoader` checks the path and extension, opens the file with
-`cv2.VideoCapture`, and exposes a `VideoMetadata` record (size, FPS, frame
-count, duration). It yields frames one at a time, so a video is never held
-in memory. It is a context manager, so the capture is released even when
-processing raises an exception. `VideoWriter` writes annotated frames at
-the source FPS and size.
+### Video (`ai_engine/video/`)
+`VideoLoader` opens a file or a camera index (`--video 0`), exposes
+`VideoMetadata` (size, FPS, `fps_source` `container` or `measured`, frame
+count) and yields frames one at a time. `skip()` grabs a frame without
+decoding it, which implements `--frame-stride`. For a live source with unknown
+FPS it measures the rate over 30 frames and buffers those frames. A mocked
+`capture_factory` makes this testable without hardware. `VideoWriter` writes
+mp4v at the effective FPS. `transcode.reencode_h264()` runs ffmpeg afterwards.
 
-### YOLO detection (`ai_engine/detection/detector.py`)
-`PersonDetector` resolves the device, then loads YOLO11n **once**. It
-downloads the weights into `ai_engine/models/` if they are missing. It holds
-the inference settings (classes=[0], confidence, imgsz, device).
-`run_timed()` wraps any Ultralytics call (`predict` or `track`), synchronizes
-the device, and records the wall-clock time. `parse_person_boxes()` converts
-an Ultralytics `Results` object into immutable `PersonDetection` records
-(bbox, confidence, optional track ID). Any non-person class is dropped.
+### Detection (`ai_engine/detection/`)
+`PersonDetector` loads YOLO (`.pt`) or CoreML (`.mlpackage`) once and
+reports the device (`coreml` for CoreML, where `--device` is ignored).
+`resolve_model_path()` only places a bare string name in
+`ai_engine/models/`; any path with a directory part or a `Path` is used as given.
+`run_timed()` wraps an Ultralytics call with device sync and timing.
+`ultralytics`/`torch` are imported lazily.
 
-### ByteTrack (`ai_engine/tracking/tracker.py`)
-`PersonTracker` wraps the detector's **same model instance** and calls
-`model.track(..., tracker="bytetrack.yaml")`. The first frame after
-construction or `reset()` uses `persist=False`, which makes Ultralytics build
-a new ByteTrack instance with IDs starting at 1. Later frames use
-`persist=True` so tracks carry over. Detections that ByteTrack has not
-confirmed have no ID and are not returned. IDs belong to one video only and
-are not permanent identities.
+### Tracking (`ai_engine/tracking/tracker.py`)
+`PersonTracker` wraps the detector's model and calls `model.track()` with a
+**generated tracker YAML**. `TrackerSettings` holds `input_confidence`
+(boxes passed into ByteTrack, default 0.1), `new_track_confidence`
+(ByteTrack `new_track_thresh`, the `--confidence` value) and `buffer_seconds`.
+`resolve_tracker_config()` copies Ultralytics' installed `bytetrack.yaml` and
+sets `track_buffer = round(buffer_seconds × effective FPS)`; in Ultralytics
+8.4.198 `BYTETracker` uses `track_buffer` directly as processed frames.
+`configure(effective_fps)` regenerates the YAML and resets the tracker; the
+file is named by content hash in `<tmp>/queuevision/trackers/`.
 
-### Visualization (`ai_engine/visualization/metrics_overlay.py`)
-These are pure drawing functions that modify the frame in place:
-`draw_people` draws green boxes with `ID n  conf` labels, and
-`draw_metrics_panel` draws a translucent dark panel with the QueueVision
-brand, the people-in-frame count, rolling inference and processing FPS, the
-frame number and the device. They have no model or I/O dependencies, so
-Sprint 2 can add a `draw_queue_zone` beside them.
+### Queue (`ai_engine/queue/`)
+* `camera_config.py`: validated, frozen `CameraConfig` loaded from YAML.
+* `zone.py`: `QueueZone`, a normalized polygon with a NumPy ray-casting test.
+* `membership.py`: `QueueMembershipTracker`, per-track state machine
+  (candidate, in_queue, left) using the foot point, dwell time, a speed
+  filter and an exit grace period. State for tracks unseen for longer than
+  the grace period is dropped.
+* `queue_length.py`: `QueueLengthEstimator`, a sliding-window median.
+* `analyzer.py`: `QueueAnalyzer` combines them into one `update()` call.
 
-### Performance metrics (`ai_engine/metrics/performance.py`)
-`PerformanceTracker` keeps running totals, which are used for the true
-averages, and a 30-frame window, which is used only for the live overlay.
-Inference time is YOLO plus ByteTrack. Processing time runs from just before
-the frame is decoded until it has been written. The optional GUI display is
-excluded. `build_report()` produces the JSON schema, and `save_json()` writes it.
+### Pipeline (`ai_engine/pipeline.py`)
+`iter_frame_results(loader, tracker, queue_analyzer, frame_stride, max_frames)`
+skips, decodes, tracks, runs the analyzer and yields `FrameResult`. It does no
+drawing, writing or timing aggregation.
 
-### Output generation (`ai_engine/run_tracking.py`)
-`process_video()` connects the components for one video: it warms up, then
-for each frame reads, tracks, draws, writes and records. It then saves the
-report. `main()` parses CLI arguments, configures logging (console and file),
-loads the detector and turns known errors into exit code 1.
+### Visualization (`ai_engine/visualization/`)
+Pure drawing functions: `draw_queue_zone`, `draw_people` (green other,
+yellow candidate, orange in queue, plus a foot dot), `draw_metrics_panel`
+(queue length shown separately from people in frame, any corner via
+`--panel-position`) and `privacy.blur_heads`.
+
+### Metrics and outputs (`ai_engine/metrics/`)
+`PerformanceTracker` and `save_json` are unchanged in role.
+`queue_outputs.py` adds `QueueTimeSeriesWriter` (one row per video second),
+`ZoneEventWriter` and `QueueSummary`, all on the standard `csv` module.
+
+### Evaluation (`ai_engine/evaluation/`)
+`mot_eval.py` exports and scores MOTChallenge tracks; `queue_eval.py`
+compares queue-length predictions with manual counts. CLI wrappers are
+`ai_engine/evaluate_tracking.py` and `ai_engine/evaluate_queue.py`.
+
+### Tools (`ai_engine/tools/`)
+`draw_zone.py`, `make_annotation_kit.py` and `export_model.py`.
+
+### Command line (`ai_engine/run_tracking.py`)
+`process_video(source, tracker, RunOptions)` is the one consumer of the
+generator that writes files; `main()` parses flags and maps known errors to
+exit code 1.
+
+## Dependency rules
+
+```
+config  ◄── detection/types ◄── queue/*  ◄── pipeline ◄── run_tracking
+                 ▲                              ▲
+                 └── evaluation/*               └── tracking ◄── detection/detector (YOLO)
+```
+
+* `queue/` and `evaluation/` must not import YOLO, torch, ultralytics or
+  drawing code. They depend only on NumPy, PyYAML, the standard library and
+  `detection/types.py` (and `config`).
+* `visualization/` imports no model or queue-state code except constants and
+  `PersonDetection`.
+* Only `detection/detector.py` and `tracking/tracker.py` touch ultralytics,
+  and they import it lazily, so the unit-test suite runs without torch. The CI
+  `lint-and-unit` job enforces this by not installing it.
+* Scripts run directly replace `sys.path[0]` with the project root, because
+  `ai_engine/queue` would otherwise shadow the standard-library `queue` module.
 
 ## Design decisions
 
 | Decision | Reason |
 |---|---|
-| Ultralytics' built-in ByteTrack | Required by the sprint. It runs in the same `track()` call, which avoids a second detection pass. |
-| Tracker reset by `persist=False` instead of reaching into `predictor.trackers` | Uses the public API, so it is less fragile across Ultralytics versions. |
-| Explicit device errors (no silent CPU fallback) | Reports must not claim acceleration that was not used. `auto` is the safe path. |
-| Device sync inside the timed block | MPS/CUDA calls are asynchronous. Without a sync, inference time is under-reported. |
-| Warm-up frame excluded from metrics | First-call model setup and MPS kernel compilation took about 8 s in testing and would distort the average FPS. |
-| Frozen `PersonDetection` dataclass | Gives later sprints (ROI tests, entry/exit events) a stable, typed contract. |
+| Ultralytics' built-in ByteTrack with a generated YAML | Keeps one `track()` call, but lets us pass low-score boxes and set the buffer in seconds |
+| Tracker reset by `persist=False` | Public API, less fragile across Ultralytics versions |
+| Foot point for membership | The floor position is stable under partial occlusion and matches how the zone is drawn |
+| Zone in normalized coordinates | One camera config works at any resolution |
+| Events only for confirmed members | Walkers through the zone must not look like queue joins |
+| Video time, never wall-clock | Results are reproducible and independent of processing speed |
+| Explicit device errors | Reports must not claim acceleration that was not used |
+| Generator instead of a monolithic loop | File output, tests and a future live API share one processing path |
 
 ## Extension points for later sprints
 
-* **Sprint 2 (ROI and queue count):** add `ai_engine/queue/roi.py` that takes
-  `list[PersonDetection]` and a polygon and returns the people inside it,
-  using the bbox bottom-centre (feet) point. The tracker and detector need no changes.
-* **Sprint 3 (entry/exit, waiting time):** use `track_id` across frames
-  to record when each ID enters and leaves the ROI. Add tolerance for ID switches.
-* **Sprint 4 (FastAPI):** `process_video()` already returns a report dict.
-  A frame-level generator can be split out of it for WebSocket streaming.
-* **Model comparison:** `--model yolo11s.pt`. The report records the model name and path.
+* **Sprint 3 (lifecycle events, waiting time, service rate, alerts):** consume
+  `QueueFrameState.events`. Waiting time = `zone_exit.timestamp_s -
+  zone_enter.zone_entered_s` for the same `track_id`; add tolerance for ID
+  switches and handle members still queued at the end of a video explicitly.
+  New logic goes in `ai_engine/queue/` as another consumer of `ZoneEvent`s,
+  behind the same dependency rules.
+* **Sprint 4 (FastAPI, WebSocket):** iterate `iter_frame_results()` directly
+  (a live `VideoLoader` source already exists). Serialize `FrameResult`
+  fields, `PersonDetection.to_dict()` and `ZoneEvent.to_dict()`. Drawing and
+  H.264 are optional consumers and are not needed for the API.
+* **Model comparison / speed:** `--model yolo11s.pt`, CoreML via
+  `export_model.py`, `--frame-stride`. The report records model, device and
+  resolved tracker settings.
+* **Evaluation:** new datasets plug in as sequence folders for
+  `evaluate_tracking.py` or manual counts for `evaluate_queue.py`.

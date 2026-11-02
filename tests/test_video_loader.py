@@ -59,9 +59,8 @@ def test_corrupt_video_raises(tmp_path: Path) -> None:
 
 
 def test_released_on_exception(synthetic_video: Path) -> None:
-    with pytest.raises(RuntimeError):
-        with VideoLoader(synthetic_video) as loader:
-            raise RuntimeError("processing failed")
+    with pytest.raises(RuntimeError), VideoLoader(synthetic_video) as loader:
+        raise RuntimeError("processing failed")
     assert not loader.is_open
 
 
@@ -77,6 +76,5 @@ def test_writer_creates_readable_video(tmp_path: Path) -> None:
 
 
 def test_writer_rejects_wrong_frame_size(tmp_path: Path) -> None:
-    with VideoWriter(tmp_path / "out.mp4", 10.0, (64, 48)) as writer:
-        with pytest.raises(ValueError):
-            writer.write(np.zeros((10, 10, 3), dtype=np.uint8))
+    with VideoWriter(tmp_path / "out.mp4", 10.0, (64, 48)) as writer, pytest.raises(ValueError):
+        writer.write(np.zeros((10, 10, 3), dtype=np.uint8))

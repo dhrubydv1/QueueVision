@@ -6,9 +6,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ai_engine.detection.detector import PersonDetection
+from ai_engine.detection.types import PersonDetection
 from ai_engine.metrics.performance import PerformanceTracker, save_json
-from ai_engine.run_tracking import main, model_display_name, process_video
+from ai_engine.run_tracking import RunOptions, main, model_display_name, process_video
 from ai_engine.tracking.tracker import PersonTracker
 from ai_engine.video.video_loader import VideoLoader
 from ai_engine.visualization.metrics_overlay import OverlayStats, draw_metrics_panel, draw_people
@@ -77,7 +77,7 @@ def test_model_display_name() -> None:
 def test_pipeline_writes_annotated_video_and_metrics(
     real_tracker: PersonTracker, synthetic_video: Path, tmp_path: Path
 ) -> None:
-    report = process_video(synthetic_video, real_tracker, output_dir=tmp_path)
+    report = process_video(synthetic_video, real_tracker, RunOptions(output_dir=tmp_path, h264=False))
 
     video_path = tmp_path / "videos" / "synthetic_tracked.mp4"
     metrics_path = tmp_path / "metrics" / "synthetic_metrics.json"
@@ -96,9 +96,27 @@ def test_pipeline_writes_annotated_video_and_metrics(
 
 @pytest.mark.integration
 def test_cli_respects_max_frames_and_reports_errors(synthetic_video: Path, tmp_path: Path) -> None:
-    assert main(["--video", str(synthetic_video), "--output", str(tmp_path), "--device", "cpu", "--max-frames", "4"]) == 0
+    assert (
+        main(
+            [
+                "--video",
+                str(synthetic_video),
+                "--output",
+                str(tmp_path),
+                "--device",
+                "cpu",
+                "--max-frames",
+                "4",
+                "--no-h264",
+            ]
+        )
+        == 0
+    )
     saved = json.loads((tmp_path / "metrics" / "synthetic_metrics.json").read_text())
     assert saved["frames_processed"] == 4
+    assert saved["configuration"]["tracker"]["input_confidence"] == 0.1
+    assert saved["configuration"]["tracker"]["resolved"]["new_track_thresh"] == 0.35
+    assert saved["configuration"]["video_codec"] == "mp4v"
     assert (tmp_path / "logs" / "synthetic_tracking.log").read_text()
 
     assert main(["--video", str(tmp_path / "missing.mp4"), "--output", str(tmp_path), "--device", "cpu"]) == 1

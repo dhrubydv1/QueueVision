@@ -2,64 +2,58 @@
 
 from __future__ import annotations
 
+import os
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from ultralytics import YOLO
 
 from ai_engine import config
+from ai_engine.detection.types import PersonDetection
 from ai_engine.utils.device import select_device, synchronize
+
+if TYPE_CHECKING:  # ultralytics is imported lazily so light modules stay torch-free
+    from ultralytics import YOLO
+
+COREML_SUFFIX = ".mlpackage"
+COREML_DEVICE = "coreml"
 
 
 class ModelLoadError(RuntimeError):
     """Raised when YOLO weights cannot be found, downloaded or loaded."""
 
 
-@dataclass(frozen=True)
-class PersonDetection:
-    """One detected (and optionally tracked) person in a frame.
-
-    ``track_id`` is a per-video ByteTrack ID, not a permanent identity: the
-    same person can receive a new ID after occlusion or leaving the frame.
-    """
-
-    bbox: tuple[int, int, int, int]  # x1, y1, x2, y2 in pixels
-    confidence: float
-    track_id: int | None = None
-
-    @property
-    def center(self) -> tuple[int, int]:
-        x1, y1, x2, y2 = self.bbox
-        return (x1 + x2) // 2, (y1 + y2) // 2
-
-    def to_dict(self) -> dict[str, Any]:
-        data: dict[str, Any] = {
-            "class": config.PERSON_CLASS_NAME,
-            "confidence": round(self.confidence, 4),
-            "bbox": list(self.bbox),
-        }
-        if self.track_id is not None:
-            data["track_id"] = self.track_id
-        return data
-
-
 def resolve_model_path(model_path: str | Path) -> Path:
-    """Place bare model names (e.g. ``yolo11s.pt``) in the local models cache."""
-    path = Path(model_path).expanduser()
-    if path.parent == Path("."):
-        path = config.MODELS_DIR / path.name
-    return path
+    """Return where the model lives.
+
+    Only a bare file name given as a string (``"yolo11s.pt"``) is placed in
+    the local models cache; any path with a directory part, including
+    ``"./yolo11n.pt"``, and any :class:`~pathlib.Path` object is used as given.
+    """
+    if isinstance(model_path, str):
+        text = model_path.strip()
+        if text and os.path.basename(text) == text and not text.startswith("."):
+            return config.MODELS_DIR / text
+    return Path(model_path).expanduser()
+
+
+def is_coreml_model(model_path: str | Path) -> bool:
+    return Path(model_path).suffix.lower() == COREML_SUFFIX
 
 
 def load_yolo_model(model_path: str | Path = config.DEFAULT_MODEL_PATH) -> YOLO:
     """Load YOLO weights, downloading official weights into the cache if missing."""
+    from ultralytics import YOLO
+
     path = resolve_model_path(model_path)
+    if is_coreml_model(path) and not path.exists():
+        raise ModelLoadError(
+            f"CoreML model not found: {path}. Create it with ai_engine/tools/export_model.py"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        return YOLO(str(path))
+        return YOLO(str(path), task="detect")
     except Exception as error:  # Ultralytics raises several error types here.
         raise ModelLoadError(f"Could not load YOLO model '{path}': {error}") from error
 
@@ -101,6 +95,10 @@ class PersonDetector:
 
     The loaded model is also shared with :class:`PersonTracker`, so a video
     is never processed with a model that is re-created per frame.
+
+    For a CoreML ``.mlpackage`` the PyTorch device does not apply: inference
+    runs through Core ML (which picks CPU/GPU/Neural Engine itself) and
+    ``device`` is reported as ``"coreml"``.
     """
 
     def __init__(
@@ -116,10 +114,15 @@ class PersonDetector:
         if image_size <= 0 or image_size % 32 != 0:
             raise ValueError(f"Image size must be a positive multiple of 32, got {image_size}")
 
-        self.device = select_device(device)
+        self.model_path = resolve_model_path(model_path)
+        if is_coreml_model(self.model_path):
+            self.device = COREML_DEVICE
+            self._torch_device = "cpu"  # where Ultralytics keeps pre/post-processing tensors
+        else:
+            self.device = select_device(device)
+            self._torch_device = self.device
         self.confidence = confidence
         self.image_size = image_size
-        self.model_path = resolve_model_path(model_path)
         self.model = model if model is not None else load_yolo_model(self.model_path)
         self.last_inference_seconds = 0.0
 
@@ -130,19 +133,20 @@ class PersonDetector:
             "classes": [config.PERSON_CLASS_ID],
             "conf": self.confidence,
             "imgsz": self.image_size,
-            "device": self.device,
+            "device": self._torch_device,
             "verbose": False,
         }
 
-    def run_timed(self, method: str, frame: np.ndarray, **kwargs: Any) -> Any:
+    def run_timed(self, method: str, frame: np.ndarray, **overrides: Any) -> Any:
         """Call ``model.<method>`` on one frame and record its wall-clock time.
 
-        The device is synchronized before the timer stops so asynchronous
-        MPS/CUDA execution is fully counted.
+        ``overrides`` replace or extend :attr:`inference_kwargs`. The device
+        is synchronized before the timer stops so asynchronous MPS/CUDA
+        execution is fully counted.
         """
         start = time.perf_counter()
-        results = getattr(self.model, method)(frame, **self.inference_kwargs, **kwargs)
-        synchronize(self.device)
+        results = getattr(self.model, method)(frame, **{**self.inference_kwargs, **overrides})
+        synchronize(self._torch_device)
         self.last_inference_seconds = time.perf_counter() - start
         return results[0]
 

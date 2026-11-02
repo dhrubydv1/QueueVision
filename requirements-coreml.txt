@@ -1,0 +1,18 @@
+# Optional: CoreML export (ai_engine/tools/export_model.py) on macOS.
+#
+# coremltools 9.0 is only tested up to torch 2.7.0. Exporting from the main
+# environment (torch 2.15.0) fails inside coremltools' torch frontend
+# ("only 0-dimensional arrays can be converted to Python scalars"), so export
+# from a separate venv:
+#
+#   python3.11 -m venv .venv-coreml-export
+#   .venv-coreml-export/bin/pip install -r requirements-coreml.txt
+#   .venv-coreml-export/bin/python ai_engine/tools/export_model.py --model yolo11n.pt
+#
+# The resulting .mlpackage runs in the main environment once coremltools is
+# installed there too (pip install coremltools==9.0).
+coremltools==9.0
+torch==2.7.0
+torchvision==0.22.0
+ultralytics==8.4.198
+numpy<2.3

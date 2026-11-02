@@ -32,10 +32,6 @@ outputs/**
 !outputs/*/
 !outputs/*/.gitkeep
 
-# Legacy prototype media folder
-media/*
-!media/.gitkeep
-
 # macOS
 .DS_Store
 ._*

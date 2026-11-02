@@ -4,18 +4,25 @@ Tests whose names contain ``mocked`` use fake Ultralytics results to check
 parsing logic only. Tests marked ``integration`` run the real YOLO11n model.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from ai_engine import config
-from ai_engine.detection.detector import PersonDetection, PersonDetector, parse_person_boxes
+from ai_engine.detection.detector import (
+    COREML_DEVICE,
+    PersonDetector,
+    parse_person_boxes,
+    resolve_model_path,
+)
+from ai_engine.detection.types import PersonDetection
 from ai_engine.utils import device as device_utils
 from tests.conftest import make_result
 
-
 # --- device selection -------------------------------------------------------
+
 
 def test_auto_device_prefers_cuda_then_mps_then_cpu(monkeypatch) -> None:
     monkeypatch.setattr(device_utils, "cuda_available", lambda: False)
@@ -40,6 +47,7 @@ def test_unavailable_explicit_device_raises(monkeypatch) -> None:
 
 
 # --- parsing (mocked results) -------------------------------------------------
+
 
 def test_mocked_parse_keeps_only_person_class() -> None:
     result = make_result(
@@ -73,7 +81,36 @@ def test_invalid_detector_settings_rejected_before_loading_model() -> None:
         PersonDetector(image_size=630, model=object())
 
 
+def test_resolve_model_path_only_caches_bare_names() -> None:
+    assert resolve_model_path("yolo11s.pt") == config.MODELS_DIR / "yolo11s.pt"
+    # An explicit relative path is used as given, not redirected to the cache.
+    assert resolve_model_path("./yolo11n.pt") == Path("./yolo11n.pt")
+    assert resolve_model_path("weights/yolo11n.pt") == Path("weights/yolo11n.pt")
+    assert resolve_model_path(Path("yolo11n.pt")) == Path("yolo11n.pt")
+
+
+def test_coreml_model_reports_coreml_device_without_torch_device() -> None:
+    detector = PersonDetector(model_path="/models/yolo11n.mlpackage", model=object())
+    assert detector.device == COREML_DEVICE
+    assert detector.inference_kwargs["device"] == "cpu"
+
+
+def test_run_timed_overrides_confidence_for_tracking() -> None:
+    calls = []
+
+    class FakeModel:
+        def track(self, frame, **kwargs):
+            calls.append(kwargs)
+            return [make_result([], [], [])]
+
+    detector = PersonDetector(device="cpu", model=FakeModel())
+    detector.run_timed("track", np.zeros((8, 8, 3), np.uint8), conf=0.1, persist=True)
+    assert calls[0]["conf"] == 0.1 and calls[0]["persist"] is True
+    assert calls[0]["classes"] == [config.PERSON_CLASS_ID]
+
+
 # --- real model (integration) -------------------------------------------------
+
 
 @pytest.mark.integration
 def test_model_initializes(real_detector: PersonDetector) -> None:
