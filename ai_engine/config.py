@@ -29,9 +29,15 @@ def _env_int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
-DEFAULT_MODEL_PATH = Path(
-    os.environ.get("QUEUEVISION_MODEL", str(MODELS_DIR / MODEL_NAME))
-)
+DEFAULT_MODEL_PATH = Path(os.environ.get("QUEUEVISION_MODEL", str(MODELS_DIR / MODEL_NAME)))
 DEFAULT_DEVICE = os.environ.get("QUEUEVISION_DEVICE", "auto")
+# Detection threshold for plain detection, and the minimum score needed to
+# start a new ByteTrack track when tracking.
 CONFIDENCE = _env_float("QUEUEVISION_CONFIDENCE", 0.35)
 IMAGE_SIZE = _env_int("QUEUEVISION_IMGSZ", 640)
+
+# Detections passed into ByteTrack. Must stay below bytetrack.yaml's
+# track_high_thresh (0.25) so the low-score association stage receives boxes.
+TRACKER_INPUT_CONFIDENCE = 0.1
+# How long a lost track is kept before it is dropped.
+TRACK_BUFFER_SECONDS = 1.0

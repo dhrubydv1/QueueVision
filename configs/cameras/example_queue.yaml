@@ -1,0 +1,15 @@
+# Example camera configuration. Replace the zone with one drawn on real
+# queue footage: python ai_engine/tools/draw_zone.py --video <clip> --config <this file>
+camera_id: example_queue
+description: Example queue zone (replace with a real one)
+queue_zone:            # polygon, normalized 0-1 coordinates (x, y), clockwise
+  - [0.20, 0.35]
+  - [0.80, 0.35]
+  - [0.90, 0.95]
+  - [0.10, 0.95]
+membership:
+  min_dwell_seconds: 3.0               # must stay in the zone this long to count
+  max_speed_heights_per_second: 0.5    # foot-point speed / box height
+  exit_grace_seconds: 1.5              # tolerate brief exits and occlusion
+smoothing:
+  window_seconds: 2.0                  # median filter on the queue length

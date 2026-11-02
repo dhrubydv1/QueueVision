@@ -1,10 +1,10 @@
-# QueueVision Sprint 1 - tested on macOS 27.0.1 (Apple M1), Python 3.11.16.
-# Exact versions verified on 2026-11-02; see docs/testing_report.md.
+# QueueVision runtime dependencies - tested on macOS 27.0.1 (Apple M1), Python 3.11.16.
+# Versions verified 2026-11-02; see docs/testing_report.md.
 ultralytics==8.4.198   # YOLO11 + ByteTrack (pulls in torch/torchvision)
 torch==2.15.0
 torchvision==0.29.2
 opencv-python==5.0.0.93
 numpy==2.4.6
 lap==0.5.13            # linear assignment used by ByteTrack
-pandas==3.1.0          # reserved for Sprint 2+ analytics; not used yet
-pytest==9.2.0
+PyYAML==6.0.3          # camera configs and resolved tracker YAML
+# pandas was removed in Sprint 2: CSV outputs use the standard csv module.

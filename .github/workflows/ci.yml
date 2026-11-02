@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-unit:
+    # Unit tests deliberately run WITHOUT torch/ultralytics to keep queue,
+    # evaluation and video code independent of the model stack.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install light dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install opencv-python-headless==5.0.0.93 numpy==2.4.6 PyYAML==6.0.3 -r requirements-dev.txt
+      - name: Ruff
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Unit tests
+        run: pytest -v -m "not integration"
+
+  integration:
+    # Downloads yolo11n.pt from GitHub releases at test time; allowed to fail
+    # so a flaky download does not block merges. Check its log before merging.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install CPU-only PyTorch and dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg libgl1 libglib2.0-0
+          python -m pip install --upgrade pip
+          pip install torch==2.15.0 torchvision==0.29.2 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Integration tests
+        run: pytest -v -m integration

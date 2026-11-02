@@ -1,0 +1,6 @@
+# Development and evaluation tools (install on top of requirements.txt, or alone
+# with opencv/numpy/PyYAML for the torch-free unit tests - see .github/workflows/ci.yml).
+pytest==9.2.0
+ruff==0.17.3
+motmetrics==1.4.0      # MOT17 evaluation; its iou_matrix is NumPy-2-incompatible, we use our own
+scipy==1.17.1          # distractor matching in MOT evaluation
