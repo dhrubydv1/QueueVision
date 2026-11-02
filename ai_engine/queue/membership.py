@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
 
 from ai_engine.detection.types import PersonDetection
 from ai_engine.queue.camera_config import MembershipSettings
+from ai_engine.queue.event_schema import ZoneEvent
 from ai_engine.queue.zone import QueueZone
 
 
@@ -17,27 +17,6 @@ class MemberStatus(str, Enum):
     CANDIDATE = "candidate"  # inside the zone, dwell/speed rules not yet met
     IN_QUEUE = "in_queue"
     LEFT = "left"  # was in the queue, now gone for longer than the grace period
-
-
-@dataclass(frozen=True)
-class ZoneEvent:
-    """A confirmed queue member entering or leaving the queue zone.
-
-    ``zone_enter`` fires when membership is confirmed (after the dwell
-    time); ``zone_entered_s`` is when the person first stepped into the
-    zone, which is the value waiting-time logic should use. ``zone_exit``
-    uses the last time the person was seen inside the zone. All times are
-    video time (frame index / FPS), never wall-clock time.
-    """
-
-    event_type: str  # "zone_enter" | "zone_exit"
-    track_id: int
-    timestamp_s: float
-    frame_index: int
-    zone_entered_s: float
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 @dataclass
@@ -74,11 +53,17 @@ class QueueMembershipTracker:
         self.zone = zone
         self.settings = settings
         self._states: dict[int, _TrackState] = {}
+        self._in_zone_flags: dict[int, bool] = {}
 
     @property
     def statuses(self) -> dict[int, MemberStatus]:
         """Current status of every remembered track (outside tracks are omitted)."""
         return {tid: s.status for tid, s in self._states.items() if s.status is not None}
+
+    @property
+    def last_in_zone_flags(self) -> dict[int, bool]:
+        """For the last update: whether each visible track's foot point was inside the zone."""
+        return dict(self._in_zone_flags)
 
     @property
     def queue_count(self) -> int:
@@ -112,6 +97,7 @@ class QueueMembershipTracker:
         """Process one frame and return the zone events it produced."""
         grace = self.settings.exit_grace_seconds
         events: list[ZoneEvent] = []
+        self._in_zone_flags = {}
 
         for person in people:
             if person.track_id is None:
@@ -128,7 +114,9 @@ class QueueMembershipTracker:
             while state.positions and state.positions[0][0] < timestamp_s - history:
                 state.positions.popleft()
 
-            if self.zone.contains(foot, frame_size):
+            inside = self.zone.contains(foot, frame_size)
+            self._in_zone_flags[person.track_id] = inside
+            if inside:
                 self._handle_inside(state, timestamp_s, frame_index, events)
 
         for state in self._states.values():
@@ -156,7 +144,17 @@ class QueueMembershipTracker:
                 and self._average_speed(state, now) <= self.settings.max_speed_heights_per_second
             ):
                 state.status = MemberStatus.IN_QUEUE
-                events.append(ZoneEvent("zone_enter", state.track_id, now, frame_index, state.zone_entered_s))
+                events.append(
+                    ZoneEvent(
+                        "zone_enter",
+                        state.track_id,
+                        now,
+                        frame_index,
+                        state.zone_entered_s,
+                        state.zone_entered_frame,
+                        now,
+                    )
+                )
 
     def _handle_absence(self, state: _TrackState, now: float, grace: float, events: list[ZoneEvent]) -> None:
         if state.last_in_zone_s is None or now - state.last_in_zone_s <= grace:
@@ -169,6 +167,8 @@ class QueueMembershipTracker:
                     state.last_in_zone_s,
                     state.last_in_zone_frame,
                     state.zone_entered_s,
+                    state.zone_entered_frame,
+                    now,
                 )
             )
             state.status = MemberStatus.LEFT

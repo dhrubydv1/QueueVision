@@ -1,4 +1,4 @@
-# Implementation Notes (Sprint 2)
+# Implementation Notes (Sprint 3)
 
 Sprint 1 modules that did not change in purpose (`utils/device.py`,
 `metrics/performance.py`, the basics of `VideoLoader`/`VideoWriter`) are
@@ -35,9 +35,12 @@ have no environment variable).
 
 ### `ai_engine/queue/`
 * `camera_config.py`: `CameraConfig`, `MembershipSettings`, `SmoothingSettings`,
+  `StitchingSettings`, `ServiceRateSettings`, `AlertSettings`,
   `load_camera_config()`, `save_camera_config()`, `CameraConfigError`.
   Validation: at least 3 zone points in [0, 1], positive rule values, unknown
-  keys rejected.
+  keys rejected. Optional `service_zone` (polygon) or `service_line` (exactly
+  2 points), never both; `service_rate.method` is `window` or `ewma`; alert
+  thresholds may be null and alerts are enabled when at least one is set.
 * `zone.py`: `QueueZone` (normalized polygon, `to_pixels()`, `contains()`) and
   a NumPy ray-casting `point_in_polygon()`.
 * `membership.py`: `QueueMembershipTracker`, `MemberStatus`, `ZoneEvent`,
@@ -50,8 +53,38 @@ have no environment variable).
     this stays a member; state for tracks unseen for longer is dropped.
   * `zone_enter` timestamp = confirmation time; `zone_entered_s` = first time
     in the zone. `zone_exit` timestamp = last time seen in the zone.
+  * Exposes per-track in-zone flags (`last_in_zone_flags`) for the lifecycle.
 * `queue_length.py`: `QueueLengthEstimator`, sliding-window median.
-* `analyzer.py`: `QueueAnalyzer.update()` returns a `QueueFrameState`.
+* `event_schema.py`: `SCHEMA_VERSION = "1.0"`, `EVENT_TYPES`, the event
+  dataclasses (`ZoneEvent`, `QueueJoinEvent`, `ServiceStartEvent`,
+  `QueueAbandonEvent`, `CongestionEvent`) with `to_dict()`. `ZoneEvent` is
+  re-exported from `membership.py`. Contract: [event_schema.md](event_schema.md).
+* `service_point.py`: `ServiceZone` (foot point inside the polygon) and
+  `ServiceLine` (the step from the previous to the current foot point crosses
+  or touches the segment; no previous point means not reached).
+* `stitching.py`: `TrackStitcher.update()` returns `track_id -> person_key`
+  (`p0001`, ... per video). A track id never seen before is linked to a person
+  who was last seen inside the queue zone, `0 < gap <= max_gap_seconds` ago and
+  within `max_distance_heights` box heights, nearest first, one new track per
+  person. A retired id that reappears gets a new key. Lost persons are
+  forgotten after the gap. Disabled stitching gives every id its own key.
+* `events.py`: `QueueLifecycle` (per `person_key`): emits `queue_join` on the
+  first `zone_enter` of a person (timestamp = earliest zone entry across their
+  tracks), `service_start` when a joined person reaches the service point,
+  and `queue_abandon` when an unserved joined person has not been in the zone
+  for `abandon_after_seconds`. Counts `service_visits_without_join`; exposes
+  `waiting_count`, `pending_abandon_count` and the tracks that just reached the
+  service point (overlay colour).
+* `waiting_time.py`: `WaitLog` (`CompletedWait`, `AbandonedWait`, summary with
+  mean, median, linear-interpolated p90, throughput per minute, abandonment
+  rate), `ServiceRate`, `ServiceRateEstimator` (window or EWMA, low/high from
+  the recent estimates), `WaitPrediction` and `predict_wait()`.
+* `alerts.py`: `CongestionMonitor` (start and end after `min_duration_seconds`,
+  then `cooldown_seconds`).
+* `analyzer.py`: `QueueAnalyzer(camera, stitching_enabled=None)`: `update()`
+  returns a `QueueFrameState`; `report(duration_s)` returns the Sprint 3 part
+  of the metrics JSON. Order: stitcher, membership, lifecycle, wait log and
+  service rate, queue length, prediction, congestion monitor.
 
 ### `ai_engine/pipeline.py`
 `iter_frame_results()` and `FrameResult` (see the architecture document).
@@ -67,34 +100,51 @@ have no environment variable).
   logs a warning.
 
 ### `ai_engine/visualization/`
-* `metrics_overlay.py`: `draw_queue_zone()`, status-coloured `draw_people()`
-  with a foot dot, `draw_metrics_panel()` with a separate "Queue length" line
-  and `PANEL_POSITIONS`.
+* `metrics_overlay.py`: `draw_queue_zone()`, `draw_service_point()`,
+  status-coloured `draw_people()` with a foot dot (magenta for people at the
+  service point), `draw_alert_banner(frame, reasons, position="top")` (also
+  `"bottom"`), `draw_metrics_panel()` with a separate "Queue length" line plus
+  service-rate and predicted-wait lines, `format_duration()`, and
+  `PANEL_POSITIONS`.
 * `privacy.py`: `blur_heads()` Gaussian-blurs the top `head_fraction` of each
   box, in place, before boxes are drawn.
 
 ### `ai_engine/metrics/queue_outputs.py`
-`QueueTimeSeriesWriter` (first frame of each video second),
-`ZoneEventWriter`, `QueueSummary`. Standard `csv` module only.
+`QueueTimeSeriesWriter` (first frame of each video second, with service rate
+and prediction columns), `ZoneEventWriter` (zone events only), `WaitsWriter`,
+`AlertWriter`, `EventLogWriter` (JSON Lines, one `to_dict()` per event),
+`QueueSummary` (counts every event type). Standard `csv` and `json` only.
 
 ### `ai_engine/evaluation/`
 * `mot_eval.py`: `MotWriter`, `load_ground_truth()`, `load_tracks()`,
   `evaluate_tracks()`, our own `iou_matrix()` and `drop_distractor_matches()`.
 * `queue_eval.py`: `read_predictions()`, `read_annotations()`, `compare_counts()`.
+* `wait_eval.py`: `read_ground_truth_waits()`, `read_predicted_waits()`,
+  `read_timeseries_predictions()`, `match_by_service_time()` (one-to-one,
+  nearest service time within the tolerance), `evaluate_waits()`,
+  `evaluate_predictions()`, `evaluate_throughput()`.
 
 ### Command-line programs
 * `run_tracking.py`: flags are listed in the README. `RunOptions` and
   `process_video()` consume `iter_frame_results()`. The report adds
   `configuration.{frame_stride, effective_fps, tracker, blur_heads,
-  head_fraction, video_codec}` and, with a camera, a `queue` section.
+  head_fraction, video_codec}` and, with a camera, a `queue` section that
+  now also holds `stitching`, `service_point`, `waiting`, `service_rate`,
+  `alerts`, `waiting_at_end`, `pending_abandon_at_end` and
+  `service_visits_without_join`. `--no-stitching` forces stitching off.
+  The congestion banner is drawn at the bottom when the metrics panel is at a
+  top position, otherwise at the top.
 * `evaluate_tracking.py`: `--tracks`, `--sequence-dir`, `--video`,
   `--frame-stride`, `--output`.
 * `evaluate_queue.py`: `--predicted`, `--annotations`, `--column`,
   `--tolerance`, `--output`.
-* `tools/draw_zone.py`: `--video`, `--config`, `--camera-id`, `--points`,
-  `--preview`, `--frame-index`.
+* `evaluate_waiting.py`: `--predicted-waits`, `--ground-truth`,
+  `--timeseries`, `--duration`, `--tolerance`, `--output`.
+* `tools/draw_zone.py`: `--video`, `--config`, `--target`, `--camera-id`,
+  `--points`, `--preview`, `--frame-index`. Setting a service zone removes the
+  service line and vice versa; a service point needs an existing config.
 * `tools/make_annotation_kit.py`: `--video`, `--camera-config`, `--every`,
-  `--output-dir`, `--force`.
+  `--output-dir`, `--force`. Also writes the `<name>_waits_gt.csv` template.
 * `tools/export_model.py`: `--model`, `--imgsz`, `--half`.
 
 ## Processing loop (per processed frame)
@@ -102,9 +152,11 @@ have no environment variable).
 1. `iter_frame_results`: skip `stride - 1` frames without decoding, read one frame.
 2. `tracker.update(frame)` (timed, device-synchronized), then
    `queue_analyzer.update(...)` if a camera config is set; yield `FrameResult`.
-3. `process_video`: optional `blur_heads`, `draw_queue_zone`, `draw_people`,
-   `draw_metrics_panel`, `writer.write`.
-4. Record performance, MOT rows, queue time series and events.
+3. `process_video`: optional `blur_heads`, `draw_queue_zone`,
+   `draw_service_point`, `draw_people`, `draw_alert_banner` (while an alert is
+   active), `draw_metrics_panel`, `writer.write`.
+4. Record performance, MOT rows, queue time series and events (zone events,
+   waits, alerts and the JSONL event log).
 5. If `--show`: `imshow`/`waitKey`, after timing, so it is excluded.
 6. After the loop: ffmpeg H.264 re-encode, then the metrics JSON.
 
@@ -116,7 +168,16 @@ have no environment variable).
 | Track buffer | Defined in seconds and converted using the effective FPS. In Ultralytics 8.4.198 `BYTETracker` uses `track_buffer` directly as processed frames (`max_frames_lost = track_buffer`); the older `frame_rate / 30 × track_buffer` formula is not in this version. |
 | Generated tracker YAML | Written to the system temp folder, not the repo; settings are recorded in the metrics JSON. |
 | Membership events only for confirmed members | Walkers through the zone must not look like queue joins. |
-| No end-of-video exits | Inventing exits at the end would distort waiting times. The count of members still queued is stored in `queue.members_still_in_queue_at_end`. |
+| No end-of-video events | Inventing exits or outcomes at the end would distort waiting times. Members still queued are reported in `queue.members_still_in_queue_at_end`, `queue.waiting_at_end` and `queue.pending_abandon_at_end`. |
+| Join time = first time in the zone | The earliest zone entry across stitched tracks, not the confirmation time (`detected_s`). Confirmation lags by the dwell time. |
+| Abandon timeout | Decided after `max(exit_grace_seconds, stitching max_gap_seconds)` (the gap only with stitching on), and only when a service point exists. |
+| Service point placement | It must lie inside (or right at the edge of) the queue zone. A member who must walk outside the zone for longer than the abandon timeout to reach it is recorded as abandoned (observed with stitching off, where the timeout is `exit_grace_seconds`). |
+| Service rate | `insufficient_data` until `min_history_seconds` of video and `min_services` services. A computed rate of exactly 0 is a valid estimate. |
+| Wait prediction | `queue_length / service rate`. `unknown` when the rate is insufficient or zero, never 0 or infinity. Low/high come from the largest and smallest rate estimated within the window; this is a range, not a statistical interval. |
+| Alerts | The condition must hold for `min_duration_seconds` to start and be false for `min_duration_seconds` to end an alert; a new alert waits `cooldown_seconds` after the previous end. |
+| Stitching can merge different people | In dense non-queue crowds it can link different people; it chained up to 8 track ids on MOT17-09 (street footage). It must be validated on real queue footage; `--no-stitching` is available for comparison. |
+| Banner position | The red congestion banner is drawn at the bottom when the metrics panel is at a top position so that it does not cover the panel title. |
+| Anonymous `person_key` | A per-video counter; events and waits contain no identities and no images. |
 | Raw count includes briefly occluded members | They stay members during the grace period; the median smoothing handles the rest. |
 | `queue_length` is a median | Removes one-frame spikes without smearing them across the window. |
 | Video time for all timestamps | `frame_index / FPS`, independent of processing speed. |

@@ -9,6 +9,12 @@ Writes ``datasets/annotations/<name>_frames/t0005.0_f000150.png`` (zone drawn,
 time/frame stamped) and ``datasets/annotations/<name>_queue_counts.csv`` with
 columns ``time_s, frame, queue_count``. A person fills in ``queue_count``
 by counting the people queuing in each image.
+
+Also writes ``datasets/annotations/<name>_waits_gt.csv`` (header ``person,join_s,
+service_s,abandoned``) for manual waiting-time ground truth, unless it already
+exists (``--force`` overwrites it). One row per person: the video time they joined
+the queue, the time they reached the service point (blank if they gave up) and
+``true``/``false`` for abandoned.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ from ai_engine.visualization.metrics_overlay import draw_queue_zone
 
 ANNOTATIONS_DIR = config.PROJECT_ROOT / "datasets" / "annotations"
 CSV_COLUMNS = ("time_s", "frame", "queue_count")
+WAITS_GT_COLUMNS = ("person", "join_s", "service_s", "abandoned")
 
 
 def make_kit(
@@ -85,6 +92,10 @@ def make_kit(
         writer = csv.writer(handle)
         writer.writerow(CSV_COLUMNS)
         writer.writerows(rows)
+    waits_path = output_dir / f"{name}_waits_gt.csv"
+    if force or not waits_path.exists():
+        with waits_path.open("w", newline="", encoding="utf-8") as handle:
+            csv.writer(handle).writerow(WAITS_GT_COLUMNS)
     return frames_dir, csv_path, len(rows)
 
 

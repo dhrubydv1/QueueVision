@@ -12,8 +12,13 @@ Outputs (``<name>`` is the video stem or ``camera<N>``):
 * ``outputs/videos/<name>_tracked.mp4`` and ``outputs/metrics/<name>_metrics.json``
 * ``outputs/logs/<name>_tracking.log``
 * with ``--save-mot``: ``outputs/tracks/<name>_mot.txt``
-* with ``--camera-config``: ``outputs/timeseries/<name>_queue.csv`` and
-  ``outputs/events/<name>_zone_events.csv``
+* with ``--camera-config``: ``outputs/timeseries/<name>_queue.csv`` (queue length,
+  service rate, predicted wait), ``outputs/events/<name>_zone_events.csv``,
+  ``outputs/events/<name>_waits.csv`` (one row per completed or abandoned wait),
+  ``outputs/events/<name>_alerts.csv`` (congestion alerts) and
+  ``outputs/events/<name>_events.jsonl`` (every event, versioned schema); the
+  metrics JSON gains waiting-time, service-rate and alert sections under ``queue``.
+  ``--no-stitching`` turns ID-switch stitching off.
 """
 
 from __future__ import annotations
@@ -35,12 +40,20 @@ if __package__ in (None, ""):
     sys.path[0] = str(Path(__file__).resolve().parent.parent)
 
 import cv2
+import numpy as np
 
 from ai_engine import config
 from ai_engine.detection.detector import ModelLoadError, PersonDetector
 from ai_engine.evaluation.mot_eval import MotWriter
 from ai_engine.metrics.performance import PerformanceTracker, save_json
-from ai_engine.metrics.queue_outputs import QueueSummary, QueueTimeSeriesWriter, ZoneEventWriter
+from ai_engine.metrics.queue_outputs import (
+    AlertWriter,
+    EventLogWriter,
+    QueueSummary,
+    QueueTimeSeriesWriter,
+    WaitsWriter,
+    ZoneEventWriter,
+)
 from ai_engine.pipeline import iter_frame_results, source_fps
 from ai_engine.queue.analyzer import QueueAnalyzer
 from ai_engine.queue.camera_config import CameraConfig, CameraConfigError, load_camera_config
@@ -51,9 +64,13 @@ from ai_engine.video.video_loader import VideoLoader, VideoLoadError, VideoWrite
 from ai_engine.visualization.metrics_overlay import (
     PANEL_POSITIONS,
     OverlayStats,
+    draw_alert_banner,
     draw_metrics_panel,
     draw_people,
     draw_queue_zone,
+    draw_service_point,
+    predicted_wait_text,
+    service_rate_text,
 )
 from ai_engine.visualization.privacy import DEFAULT_HEAD_FRACTION, blur_heads
 
@@ -76,6 +93,7 @@ class RunOptions:
     panel_position: str = "top-left"
     h264: bool = True
     keep_mp4v: bool = False
+    stitching: bool | None = None  # None: follow the camera config; False forces it off
 
     def __post_init__(self) -> None:
         if self.frame_stride < 1:
@@ -100,7 +118,19 @@ def output_paths(name: str, output_dir: Path) -> dict[str, Path]:
         "tracks": output_dir / "tracks" / f"{name}_mot.txt",
         "timeseries": output_dir / "timeseries" / f"{name}_queue.csv",
         "events": output_dir / "events" / f"{name}_zone_events.csv",
+        "waits": output_dir / "events" / f"{name}_waits.csv",
+        "alerts": output_dir / "events" / f"{name}_alerts.csv",
+        "event_log": output_dir / "events" / f"{name}_events.jsonl",
     }
+
+
+def service_point_pixels(camera: CameraConfig, frame_size: tuple[int, int]) -> np.ndarray | None:
+    """Pixel coordinates of the configured service zone or line, if any."""
+    points = camera.service_zone or camera.service_line
+    if points is None:
+        return None
+    width, height = frame_size
+    return np.array([[round(x * width), round(y * height)] for x, y in points], dtype=np.int32)
 
 
 def process_video(
@@ -145,12 +175,24 @@ def process_video(
         # Warm-up keeps one-time model setup out of the FPS measurements.
         tracker.warmup((metadata.height, metadata.width, 3))
 
-        analyzer = QueueAnalyzer(camera) if camera else None
+        analyzer = QueueAnalyzer(camera, stitching_enabled=options.stitching) if camera else None
         zone_px = analyzer.zone.to_pixels(frame_size) if analyzer else None
+        service_px = service_point_pixels(camera, frame_size) if camera else None
         writer = stack.enter_context(VideoWriter(paths["video"], effective_fps, frame_size))
         mot_writer = stack.enter_context(MotWriter(paths["tracks"])) if options.save_mot else None
         series_writer = stack.enter_context(QueueTimeSeriesWriter(paths["timeseries"])) if camera else None
         event_writer = stack.enter_context(ZoneEventWriter(paths["events"])) if camera else None
+        queue_writers = (
+            [
+                stack.enter_context(WaitsWriter(paths["waits"])),
+                stack.enter_context(AlertWriter(paths["alerts"])),
+                stack.enter_context(EventLogWriter(paths["event_log"])),
+            ]
+            if camera
+            else []
+        )
+        first_timestamp: float | None = None
+        last_timestamp = 0.0
         if options.show:
             stack.callback(cv2.destroyAllWindows)
 
@@ -160,7 +202,13 @@ def process_video(
                 blur_heads(frame, people, options.head_fraction)
             if zone_px is not None:
                 draw_queue_zone(frame, zone_px)
-            draw_people(frame, people, queue.statuses if queue else None)
+            if service_px is not None:
+                draw_service_point(frame, service_px)
+            draw_people(frame, people, queue.statuses if queue else None, queue.at_service if queue else None)
+            if queue and queue.alert_active:
+                # Keep the banner away from the metrics panel.
+                banner_position = "bottom" if options.panel_position.startswith("top") else "top"
+                draw_alert_banner(frame, queue.alert_reasons, banner_position)
             draw_metrics_panel(
                 frame,
                 OverlayStats(
@@ -173,6 +221,8 @@ def process_video(
                     processing_fps=performance.rolling_processing_fps,
                     device=detector.device,
                     queue_length=queue.queue_length if queue else None,
+                    service_rate_text=service_rate_text(queue.service_rate) if queue else None,
+                    predicted_wait_text=predicted_wait_text(queue.prediction) if queue else None,
                 ),
                 position=options.panel_position,
             )
@@ -189,10 +239,20 @@ def process_video(
             if queue:
                 queue_summary.add(queue.raw_count, queue.queue_length, queue.events)
                 series_writer.add(
-                    result.timestamp_s, result.frame_index, len(people), queue.raw_count, queue.queue_length
+                    result.timestamp_s,
+                    result.frame_index,
+                    len(people),
+                    queue.raw_count,
+                    queue.queue_length,
+                    queue.service_rate,
+                    queue.prediction,
                 )
+                first_timestamp = result.timestamp_s if first_timestamp is None else first_timestamp
+                last_timestamp = result.timestamp_s
                 for event in queue.events:
-                    event_writer.add(event)
+                    event_writer.add(event)  # ignores everything but zone events
+                    for queue_writer in queue_writers:
+                        queue_writer.add(event)
 
             if performance.frames_processed % 100 == 0:
                 LOGGER.info(
@@ -224,7 +284,13 @@ def process_video(
     if options.save_mot:
         outputs["tracks"] = str(paths["tracks"])
     if camera:
-        outputs.update(timeseries=str(paths["timeseries"]), events=str(paths["events"]))
+        outputs.update(
+            timeseries=str(paths["timeseries"]),
+            events=str(paths["events"]),
+            waits=str(paths["waits"]),
+            alerts=str(paths["alerts"]),
+            event_log=str(paths["event_log"]),
+        )
 
     report_extra: dict[str, Any] = {
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -262,6 +328,10 @@ def process_video(
             "members_still_in_queue_at_end": analyzer.membership.queue_count,
             **queue_summary.to_dict(),
         }
+        duration_s = (
+            last_timestamp - first_timestamp + 1 / effective_fps if first_timestamp is not None else 0.0
+        )
+        report_extra["queue"].update(analyzer.report(duration_s))
     report = performance.build_report(
         device=detector.device,
         total_runtime_seconds=time.perf_counter() - run_started_at,
@@ -330,6 +400,11 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--imgsz", type=int, default=config.IMAGE_SIZE)
     parser.add_argument("--frame-stride", type=int, default=1, help="Process every Nth frame")
     parser.add_argument("--camera-config", type=Path, help="Camera YAML with the queue zone")
+    parser.add_argument(
+        "--no-stitching",
+        action="store_true",
+        help="Disable ID-switch stitching inside the queue zone (overrides the camera config)",
+    )
     parser.add_argument("--save-mot", action="store_true", help="Write MOTChallenge track file")
     parser.add_argument("--blur-heads", action="store_true", help="Blur head regions in the saved video")
     parser.add_argument("--head-fraction", type=float, default=DEFAULT_HEAD_FRACTION)
@@ -364,6 +439,7 @@ def main(argv: list[str] | None = None) -> int:
             panel_position=args.panel_position,
             h264=not args.no_h264,
             keep_mp4v=args.keep_mp4v,
+            stitching=False if args.no_stitching else None,
         )
         model_load_started_at = time.perf_counter()
         detector = PersonDetector(
@@ -415,6 +491,8 @@ def main(argv: list[str] | None = None) -> int:
         report["statistics"]["maximum_people_detected_in_a_frame"],
         f", max queue length {queue['maximum_queue_length']:g}" if queue else "",
     )
+    if queue and queue.get("service_point"):
+        LOGGER.info("%d completed waits", queue["waiting"]["completed"])
     return 0
 
 

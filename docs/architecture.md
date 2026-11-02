@@ -1,4 +1,4 @@
-# QueueVision Architecture (Sprint 2)
+# QueueVision Architecture (Sprint 3)
 
 ## Data flow
 
@@ -12,22 +12,54 @@
                            │   ByteTrack settings from TrackerSettings   │
                            │        │ list[PersonDetection]              │
                            │  QueueAnalyzer  (only with a camera config) │
-                           │   QueueZone · QueueMembershipTracker        │
-                           │   QueueLengthEstimator                      │
+                           │   stitcher · membership · lifecycle · waits │
+                           │   queue length · prediction · alerts        │
                            └──────────────────┬──────────────────────────┘
                                               │ FrameResult
           ┌───────────────────────────────────┴──────────────────────────────────┐
           │ run_tracking.process_video (one consumer; Sprint 4 API is another)    │
-          │  blur_heads → draw_queue_zone → draw_people → draw_metrics_panel      │
+          │  blur_heads → draw zone / service point → draw_people                 │
+          │  → draw_alert_banner (when active) → draw_metrics_panel               │
           │  → VideoWriter → ffmpeg H.264                                         │
           │  PerformanceTracker → *_metrics.json                                  │
           │  MotWriter → tracks/*_mot.txt                                         │
-          │  QueueTimeSeriesWriter, ZoneEventWriter → timeseries/*.csv, events/*.csv
+          │  QueueTimeSeriesWriter, ZoneEventWriter, WaitsWriter, AlertWriter,    │
+          │  EventLogWriter → timeseries/*.csv, events/*.csv, events/*.jsonl      │
           └───────────────────────────────────────────────────────────────────────┘
 
  Offline:  evaluate_tracking.py  (mot_eval)  ◄── tracks/*_mot.txt + MOT17 gt
            evaluate_queue.py     (queue_eval) ◄── timeseries/*_queue.csv + manual counts
+           evaluate_waiting.py   (wait_eval)  ◄── events/*_waits.csv + manual waits_gt.csv
 ```
+
+### Inside `QueueAnalyzer.update()`
+
+```
+ people (track_id, box)
+    │
+    ▼
+ TrackStitcher ──────────────► track_id -> person_key (anonymous, per video)
+    │
+    ▼
+ QueueMembershipTracker ─────► zone_enter / zone_exit (per track) + in-zone flags
+    │
+    ▼
+ QueueLifecycle ─────────────► queue_join / service_start / queue_abandon (per person_key)
+    │                           (uses the service point: line crossing or zone)
+    ▼
+ WaitLog + ServiceRateEstimator   completed / abandoned waits; people served per minute
+    │
+    ▼
+ QueueLengthEstimator ───────► smoothed queue length (median of the raw confirmed count)
+    │
+    ▼
+ predict_wait ───────────────► queue length / service rate, with low/high, or "unknown"
+    │
+    ▼
+ CongestionMonitor ──────────► congestion_start / congestion_end
+```
+
+All events of a frame are returned in `QueueFrameState.events` in this order.
 
 ## Data contracts
 
@@ -54,23 +86,34 @@ Frozen dataclass yielded once per processed frame:
 Frozen dataclass: `raw_count` (confirmed members, including those briefly
 occluded within the grace period), `queue_length` (median of `raw_count`
 over `smoothing.window_seconds`), `statuses` (`track_id -> MemberStatus`:
-`candidate`, `in_queue`, `left`) and `events` (tuple of `ZoneEvent` produced
-by this frame).
+`candidate`, `in_queue`, `left`), `events` (tuple of every event produced by
+this frame: zone, lifecycle and congestion), `person_keys` (`track_id ->
+person_key`), `at_service` (track ids that just reached the service point,
+for the overlay), `service_rate` (`ServiceRate`), `prediction`
+(`WaitPrediction`), `alert_active` and `alert_reasons`.
 
-### `ZoneEvent` (`ai_engine/queue/membership.py`)
-Frozen dataclass: `event_type`, `track_id`, `timestamp_s`, `frame_index`,
-`zone_entered_s`.
+`QueueAnalyzer.report(duration_s)` returns the Sprint 3 part of the metrics
+JSON `queue` section.
+
+### Events (`ai_engine/queue/event_schema.py`)
+Seven event types in schema version 1.0: `zone_enter`, `zone_exit`,
+`queue_join`, `service_start`, `queue_abandon`, `congestion_start`,
+`congestion_end`. All have `to_dict()`. The field-by-field contract, with
+examples and suggested SQLite tables, is in [event_schema.md](event_schema.md).
+`ZoneEvent` moved here from `membership.py` (still importable from both).
 
 | Event | Fires when | `timestamp_s` |
 |---|---|---|
 | `zone_enter` | Membership is confirmed (dwell and speed rules met) | Confirmation time |
 | `zone_exit` | A confirmed member has been outside the zone for longer than `exit_grace_seconds` | Last time seen inside the zone |
 
-`zone_entered_s` is when the person first stepped into the zone and is the
-value Sprint 3 should use as the queue-join time. Only confirmed members
+`zone_entered_s` (with `zone_entered_frame`) is when the person first stepped
+into the zone and is the value used as the queue-join time. `detected_s` is
+the video time at which the event was emitted. Only confirmed members
 produce events; people walking through produce none. Nothing is emitted at
-the end of a video; the number of members still queued appears in the
-metrics JSON as `queue.members_still_in_queue_at_end`.
+the end of a video; people still queued appear in the metrics JSON as
+`queue.members_still_in_queue_at_end`, `queue.waiting_at_end` and
+`queue.pending_abandon_at_end`.
 
 ## Components
 
@@ -110,6 +153,17 @@ file is named by content hash in `<tmp>/queuevision/trackers/`.
   filter and an exit grace period. State for tracks unseen for longer than
   the grace period is dropped.
 * `queue_length.py`: `QueueLengthEstimator`, a sliding-window median.
+* `event_schema.py`: the versioned event dataclasses (see above).
+* `service_point.py`: `ServiceLine` (a segment crossing or touching the line
+  between two consecutive foot points) and `ServiceZone` (foot point inside a
+  polygon), built by `service_point_from_config()`.
+* `stitching.py`: `TrackStitcher` maps ByteTrack ids to anonymous
+  `person_key`s and bridges ID switches that happen inside the queue zone.
+* `events.py`: `QueueLifecycle` turns zone events, person keys and the service
+  point into `queue_join`, `service_start` and `queue_abandon`.
+* `waiting_time.py`: `WaitLog` (completed and abandoned waits, summary
+  statistics), `ServiceRateEstimator`, `predict_wait()`.
+* `alerts.py`: `CongestionMonitor`.
 * `analyzer.py`: `QueueAnalyzer` combines them into one `update()` call.
 
 ### Pipeline (`ai_engine/pipeline.py`)
@@ -118,23 +172,32 @@ skips, decodes, tracks, runs the analyzer and yields `FrameResult`. It does no
 drawing, writing or timing aggregation.
 
 ### Visualization (`ai_engine/visualization/`)
-Pure drawing functions: `draw_queue_zone`, `draw_people` (green other,
-yellow candidate, orange in queue, plus a foot dot), `draw_metrics_panel`
-(queue length shown separately from people in frame, any corner via
-`--panel-position`) and `privacy.blur_heads`.
+Pure drawing functions: `draw_queue_zone`, `draw_service_point` (magenta),
+`draw_people` (green other, yellow candidate, orange in queue, magenta at the
+service point, plus a foot dot), `draw_alert_banner` (red strip, top or
+bottom; `run_tracking` puts it at the bottom when the panel is at a top
+position so it never covers the panel), `draw_metrics_panel` (queue length
+shown separately from people in frame, plus service rate and predicted wait,
+any corner via `--panel-position`) and `privacy.blur_heads`.
 
 ### Metrics and outputs (`ai_engine/metrics/`)
 `PerformanceTracker` and `save_json` are unchanged in role.
-`queue_outputs.py` adds `QueueTimeSeriesWriter` (one row per video second),
-`ZoneEventWriter` and `QueueSummary`, all on the standard `csv` module.
+`queue_outputs.py` holds `QueueTimeSeriesWriter` (one row per video second),
+`ZoneEventWriter`, `WaitsWriter`, `AlertWriter`, `EventLogWriter` (JSON
+Lines of every event) and `QueueSummary`, on the standard `csv` and `json`
+modules.
 
 ### Evaluation (`ai_engine/evaluation/`)
 `mot_eval.py` exports and scores MOTChallenge tracks; `queue_eval.py`
-compares queue-length predictions with manual counts. CLI wrappers are
-`ai_engine/evaluate_tracking.py` and `ai_engine/evaluate_queue.py`.
+compares queue-length predictions with manual counts; `wait_eval.py` compares
+predicted waits, wait predictions and throughput with manual waiting-time
+ground truth. CLI wrappers are `ai_engine/evaluate_tracking.py`,
+`ai_engine/evaluate_queue.py` and `ai_engine/evaluate_waiting.py`.
 
 ### Tools (`ai_engine/tools/`)
-`draw_zone.py`, `make_annotation_kit.py` and `export_model.py`.
+`draw_zone.py` (queue zone, service zone or service line via `--target`),
+`make_annotation_kit.py` (frames, queue-count CSV and waiting-time ground-truth
+template) and `export_model.py`.
 
 ### Command line (`ai_engine/run_tracking.py`)
 `process_video(source, tracker, RunOptions)` is the one consumer of the
@@ -172,21 +235,38 @@ config  ◄── detection/types ◄── queue/*  ◄── pipeline ◄─�
 | Video time, never wall-clock | Results are reproducible and independent of processing speed |
 | Explicit device errors | Reports must not claim acceleration that was not used |
 | Generator instead of a monolithic loop | File output, tests and a future live API share one processing path |
+| Join time = first time in the zone (earliest across stitched tracks), not the confirmation time | Confirmation only happens after the dwell time; using it would shorten every wait by about the dwell time |
+| Abandon is decided after `max(exit_grace_seconds, stitching max_gap_seconds)` and only when a service point exists | A person may reappear under a new ID within the stitching gap; without a service point nobody can be served, so "abandoned" would be meaningless |
+| Service point must lie inside (or right at the edge of) the queue zone | If a member must walk outside the zone for longer than the abandon timeout to reach it, they are recorded as abandoned. Observed with stitching off, where the timeout equals `exit_grace_seconds` |
+| No events at the end of a video | People still waiting have no known outcome; `waiting_at_end` and `pending_abandon_at_end` are reported instead of invented waits |
+| Service rate is `insufficient_data` until `min_history_seconds` and `min_services` | Early estimates from one or two services are noise |
+| Prediction is `unknown`, never 0 or infinity | A zero rate cannot give a finite wait, and 0 would look like a real answer |
+| Prediction uncertainty from the min/max service rate over the window | Cheap and honest: the range reflects how much the rate actually varied. It is not a statistical confidence interval |
+| Alerts need the condition for `min_duration_seconds` both to start and to end, then a cooldown | Avoids flicker and repeated alerts around a threshold |
+| Stitching is conservative but can merge different people | New ids link only to someone who vanished inside the queue zone within `max_gap_seconds` and `max_distance_heights`. In a dense non-queue crowd it can chain different people: on MOT17-09 (street footage) it chained up to 8 track ids. It must be validated on real queue footage; `--no-stitching` allows comparison |
+| `person_key` is anonymous and per video | It only ties tracks of one person together within one video; no appearance features or identity are used |
+| `detected_s` next to `timestamp_s` | Lets a consumer tell when something happened from when the system knew it |
 
 ## Extension points for later sprints
 
-* **Sprint 3 (lifecycle events, waiting time, service rate, alerts):** consume
-  `QueueFrameState.events`. Waiting time = `zone_exit.timestamp_s -
-  zone_enter.zone_entered_s` for the same `track_id`; add tolerance for ID
-  switches and handle members still queued at the end of a video explicitly.
-  New logic goes in `ai_engine/queue/` as another consumer of `ZoneEvent`s,
-  behind the same dependency rules.
-* **Sprint 4 (FastAPI, WebSocket):** iterate `iter_frame_results()` directly
-  (a live `VideoLoader` source already exists). Serialize `FrameResult`
-  fields, `PersonDetection.to_dict()` and `ZoneEvent.to_dict()`. Drawing and
-  H.264 are optional consumers and are not needed for the API.
+* **Sprint 4 (FastAPI, WebSocket, SQLite):** iterate `iter_frame_results()`
+  directly (a live `VideoLoader` source already exists) and serialize
+  `FrameResult` fields, `PersonDetection.to_dict()` and each event's
+  `to_dict()`; the contract is [event_schema.md](event_schema.md) (schema
+  version 1.0, with suggested SQLite tables). Scope every `track_id` and
+  `person_key` by video or camera run, because both restart per video.
+  Stream `QueueFrameState` values (`queue_length`, `service_rate`,
+  `prediction`, `alert_active`) for live views and the events for history.
+  Drawing and H.264 are optional consumers and are not needed for the API.
+  For a live source, events are emitted as the video proceeds, but
+  `timestamp_s` can be earlier than `detected_s`, so order by `timestamp_s`
+  for history and by arrival for a live feed.
+* **Dashboard (Sprint 5):** reads the stored events, waits, alerts and time
+  series; the wait statistics in the metrics JSON `queue.waiting` section show
+  what to aggregate.
 * **Model comparison / speed:** `--model yolo11s.pt`, CoreML via
   `export_model.py`, `--frame-stride`. The report records model, device and
   resolved tracker settings.
 * **Evaluation:** new datasets plug in as sequence folders for
-  `evaluate_tracking.py` or manual counts for `evaluate_queue.py`.
+  `evaluate_tracking.py`, manual counts for `evaluate_queue.py` or manual
+  waiting-time ground truth for `evaluate_waiting.py`.
