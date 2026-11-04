@@ -32,39 +32,15 @@ from ai_engine.tools.make_annotation_kit import make_kit
 from ai_engine.video.transcode import reencode_h264
 from ai_engine.video.video_loader import VideoLoader
 from ai_engine.visualization.privacy import blur_heads
-from tests.conftest import SYNTHETIC_FPS, SYNTHETIC_SIZE, write_synthetic_video
+from tests.conftest import (
+    SYNTHETIC_FPS,
+    SYNTHETIC_SIZE,
+    FakeTracker,
+    WalkerTracker,
+    write_synthetic_video,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-
-class FakeDetector:
-    device = "cpu"
-    model_path = Path("yolo11n.pt")
-    confidence = 0.35
-    image_size = 640
-
-
-class FakeTracker:
-    """MOCKED tracker: one person standing still in the frame centre."""
-
-    def __init__(self) -> None:
-        self.detector = FakeDetector()
-        self.last_inference_seconds = 0.001
-        self.updates = 0
-        self.configured_fps: float | None = None
-
-    def configure(self, effective_fps: float) -> None:
-        self.configured_fps = effective_fps
-
-    def warmup(self, frame_shape: tuple[int, int, int]) -> None:
-        pass
-
-    def update(self, frame: np.ndarray) -> list[PersonDetection]:
-        self.updates += 1
-        return [PersonDetection(bbox=(60, 30, 100, 110), confidence=0.8, track_id=1)]
-
-    def describe(self) -> dict[str, Any]:
-        return {"type": "fake"}
 
 
 CAMERA = CameraConfig(
@@ -135,26 +111,6 @@ def test_process_video_without_camera_has_no_queue_outputs(synthetic_video: Path
 
 
 # --- waiting-time scenario ----------------------------------------------------
-
-
-class WalkerTracker(FakeTracker):
-    """MOCKED tracker: one person steps into the zone, stands still, then walks over the service line.
-
-    At 10 FPS in a 160x128 frame: outside the zone for frames 0-4, standing at x=40 (inside the
-    left 60 % zone) for frames 5-39, then walking right at 5 px/frame across the service line at
-    x=128 (crossed between frames 56 and 57).
-    """
-
-    def update(self, frame: np.ndarray) -> list[PersonDetection]:
-        index = self.updates
-        self.updates += 1
-        if index < 5:
-            center = 140
-        elif index < 40:
-            center = 40
-        else:
-            center = 40 + 5 * (index - 39)
-        return [PersonDetection(bbox=(center - 20, 30, center + 20, 110), confidence=0.9, track_id=1)]
 
 
 WAIT_CAMERA = CameraConfig(
