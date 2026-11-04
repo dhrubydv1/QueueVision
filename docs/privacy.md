@@ -28,6 +28,9 @@ what it does not, and what you must do before pointing a camera at anyone.
 | Event log and waits (`outputs/events/<name>_events.jsonl`, `<name>_waits.csv`, `<name>_alerts.csv`) | Event times, anonymous `person_key`, track IDs, wait durations, queue lengths | Low: no identities, no images |
 | Metrics JSON (`outputs/metrics/`) | Counts, timings, settings, file paths | Low |
 | Annotation frames (`datasets/annotations/<name>_frames/`) | Still images from the footage | **Yes** |
+| API uploads (`data/uploads/<id>/`) | The original uploaded video, unblurred | **Yes** |
+| API annotated video (`data/outputs/<id>/videos/`) | As above; heads blurred when `blur_heads` is on (the API default) | Reduced if blurred, otherwise **yes** |
+| API database (`data/queuevision.db`) | Events, waits, alerts, time series and reports: times, counts, anonymous `person_key`, track IDs, file paths and the original upload file name | Low: no images (the file name can still reveal where or when a clip was recorded) |
 
 Events and waits contain **no identities**. `person_key` (`p0001`, `p0002`,
 ...) is an anonymous counter that restarts for every video; it is only used to
@@ -38,6 +41,18 @@ stored in events, waits or alerts. See [event_schema.md](event_schema.md).
 The system does **not** save face crops, cropped person images or appearance
 features (no re-identification model is used), and it does not identify or
 recognise individuals. It sees a person as a box and a short-lived number.
+
+## Sprint 4 API: where data goes
+
+The API is meant to run on your own machine (it binds to 127.0.0.1 and has no
+authentication). Uploads, annotated videos and the SQLite database stay in the
+local `data/` folder (`QUEUEVISION_DATA_DIR`) and are git-ignored; nothing is
+sent to another service. Head blur is on by default for API runs. To remove a
+run, call `DELETE /api/videos/{id}` (or use the API docs page): it deletes the
+database rows, the uploaded file and the outputs of that run, and refuses
+while the run is processing (cancel it first). Deleting the `data/` folder
+removes everything. Do not expose the server to a network without adding
+authentication and HTTPS first. See [api.md](api.md).
 
 ## Retention
 
@@ -50,6 +65,8 @@ Suggested policy for real footage:
    reports (no images).
 4. If a clip must be shown (report, demo), use a `--blur-heads` render and
    check it frame by frame first.
+5. The same applies to runs in `data/`: delete them through the API when the
+   demo or evaluation is finished.
 
 ## Limits of head blur
 
@@ -78,4 +95,7 @@ from history and tell the people responsible for the location.
 ## Third-party datasets
 
 The MOT17 videos and labels used for development are public benchmark data
-under CC BY-NC-SA 3.0; see [datasets/README.md](../datasets/README.md).
+under CC BY-NC-SA 3.0; see [datasets/README.md](../datasets/README.md). The
+Collective Activity Dataset (Sprint 4 demo) is also third-party footage of
+real people: check its terms of use before redistributing anything derived
+from it, and do not commit its frames or videos.

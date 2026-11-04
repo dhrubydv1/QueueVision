@@ -7,7 +7,8 @@ Team: Dhrub Narayan Yadav and Prabin Kumar Sharma
 
 QueueVision watches a fixed camera view of a queue and estimates how long
 the queue is and how long people wait. This repository now contains
-**Sprint 3**: the AI engine that detects and tracks people, decides who is
+**Sprint 4**: the Sprint 3 AI engine plus a local upload API. The engine
+detects and tracks people, decides who is
 standing in a configured queue zone, reports the queue length over time,
 measures waiting times at a service point, estimates the service rate,
 predicts the wait, raises congestion alerts, and can score itself against
@@ -52,6 +53,12 @@ Sprint 3 adds:
    threshold for a minimum duration, with a cooldown) and a red banner in the video.
 6. **Waiting-time evaluation** against manual ground truth
    (`ai_engine/evaluate_waiting.py`).
+
+Sprint 4 adds a small local web service (`api/`): upload a recorded video,
+watch progress and live queue numbers over a WebSocket, then play the annotated
+video. Results are stored in SQLite. A plain test page is the demo screen; see
+[section 9a](#9a-api-and-demo-page) and [docs/api.md](docs/api.md). The demo
+uses clips from the Collective Activity Dataset ([datasets/README.md](datasets/README.md)).
 
 > "People in frame" is the number of people visible. "Queue length" is the
 > number of confirmed members of the queue. Queue logic runs only when a
@@ -103,10 +110,12 @@ video / webcam ─► VideoLoader ─► iter_frame_results() ─► per-frame F
 | `ai_engine/tools/` | `draw_zone`, `make_annotation_kit`, `export_model` |
 | `ai_engine/run_tracking.py` | Main command-line pipeline |
 | `ai_engine/evaluate_tracking.py`, `ai_engine/evaluate_queue.py`, `ai_engine/evaluate_waiting.py` | Evaluation commands |
+| `api/` | Sprint 4 FastAPI service: upload, background job, WebSocket, SQLite, test page. Depends on `ai_engine`; `ai_engine` never imports it |
 
 See [docs/architecture.md](docs/architecture.md),
 [docs/implementation.md](docs/implementation.md),
-[docs/event_schema.md](docs/event_schema.md) and
+[docs/event_schema.md](docs/event_schema.md),
+[docs/api.md](docs/api.md) and
 [docs/privacy.md](docs/privacy.md) for details.
 
 ## 5. Installation
@@ -170,7 +179,8 @@ cached in `ai_engine/models/`.
 
 ## 8. Datasets
 
-See [datasets/README.md](datasets/README.md): the two MOT17 preview videos,
+See [datasets/README.md](datasets/README.md): the Collective Activity Dataset
+clips used for the Sprint 4 demo, the two MOT17 preview videos,
 the MOT17 ground-truth labels used for tracking evaluation, and a guide for
 recording and labelling real queue footage. Videos and annotations stay out of Git.
 
@@ -224,6 +234,35 @@ device, a bad camera config or invalid settings.
 | `--keep-mp4v` | off | Also keep the original mp4v file |
 | `--show` | off | Live window (press q to stop) |
 | `--max-frames` | all | Stop after this many processed frames |
+
+## 9a. API and demo page
+
+The API needs the same environment as the engine (`pip install -r requirements.txt`
+includes FastAPI, uvicorn and python-multipart). Start it from the repository root:
+
+```bash
+source .venv/bin/activate
+python -m api                  # then open http://127.0.0.1:8000
+```
+
+`python -m api --help` lists `--host`, `--port` and `--reload`. The server
+binds to 127.0.0.1 by default and has no authentication, so keep it local.
+
+**Demo flow** (Collective Activity Dataset clips):
+
+1. Get `ActivityDataset.zip` from the dataset's project page (check its terms
+   of use first) and convert the queueing sequences:
+   `python ai_engine/tools/prepare_cad.py --source ~/Downloads/ActivityDataset.zip`
+   (writes `datasets/raw/cad_seqNN.mp4`; see [datasets/README.md](datasets/README.md)).
+2. Open http://127.0.0.1:8000, choose `datasets/raw/cad_seq27.mp4` and the
+   camera `cad_seq27`, then press Start.
+3. Watch the progress bar, the live queue numbers and the event list.
+4. When the run completes, play the annotated video and read the summary and
+   waits table. Earlier runs stay listed under "Previous runs".
+
+Everything the server stores is local: uploads, outputs and the SQLite
+database are under `data/` (git-ignored; override with `QUEUEVISION_DATA_DIR`).
+Endpoints, WebSocket messages and settings are in [docs/api.md](docs/api.md).
 
 ## 10. Camera config and the queue zone
 
@@ -507,6 +546,10 @@ The unit tests import only OpenCV, NumPy and PyYAML (torch and ultralytics are
 imported lazily), and CI proves it: `.github/workflows/ci.yml` has a
 `lint-and-unit` job that installs only those packages and runs ruff and the unit
 tests, and an `integration` job (allowed to fail, because it downloads weights).
+The lint-and-unit job also installs the light API dependencies (`fastapi`,
+`uvicorn[standard]`, `python-multipart`, `httpx`, all pinned) but still no
+torch; the API tests use a fake tracker. The integration job installs
+`requirements.txt` and `requirements-dev.txt`.
 Ruff is configured in `pyproject.toml`.
 
 ## 17. Troubleshooting
@@ -532,7 +575,7 @@ Ruff is configured in `pyproject.toml`.
 | 1 (done) | Video I/O, YOLO11n person detection, ByteTrack, overlay, FPS metrics |
 | 2 (done) | Queue zone and membership, queue-length series, zone events, evaluation tools, ByteTrack fix, CoreML, H.264, head blur, CI |
 | **3 (done)** | Service point, ID-switch stitching, lifecycle events, waiting time, service rate and predicted wait, congestion alerts, waiting-time evaluation |
-| 4 | FastAPI backend, WebSocket streaming (consuming `iter_frame_results()`), SQLite persistence |
+| **4 (done)** | FastAPI upload API, WebSocket live progress, SQLite persistence, demo test page, Collective Activity Dataset clips |
 | 5 | Next.js dashboard, live monitoring, analytics and historical reports |
 
 ## Legacy prototype

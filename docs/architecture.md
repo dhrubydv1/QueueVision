@@ -1,4 +1,4 @@
-# QueueVision Architecture (Sprint 3)
+# QueueVision Architecture (Sprint 4)
 
 ## Data flow
 
@@ -17,7 +17,7 @@
                            └──────────────────┬──────────────────────────┘
                                               │ FrameResult
           ┌───────────────────────────────────┴──────────────────────────────────┐
-          │ run_tracking.process_video (one consumer; Sprint 4 API is another)    │
+          │ run_tracking.process_video (one consumer; the Sprint 4 API runs it too)    │
           │  blur_heads → draw zone / service point → draw_people                 │
           │  → draw_alert_banner (when active) → draw_metrics_panel               │
           │  → VideoWriter → ffmpeg H.264                                         │
@@ -204,6 +204,50 @@ template) and `export_model.py`.
 generator that writes files; `main()` parses flags and maps known errors to
 exit code 1.
 
+## API layer (`api/`, Sprint 4)
+
+```
+ browser / client ── HTTP + WebSocket ──► api.main (FastAPI app, uvicorn)
+                                             │ upload → disk, row in SQLite, job.submit(video_id)
+                                             ▼
+                                   api.jobs.JobManager ── one worker thread ──► run_tracking.process_video(
+                                             │                                      on_frame=…, should_stop=…)
+                                             │ per frame: events → batch; once per video second:
+                                             │   time-series row + progress message, DB flush
+                                             ├──► api.db (sqlite3, own connection in the worker)
+                                             └──► subscribers (asyncio queues, via call_soon_threadsafe)
+                                                        ▲
+                                   WebSocket handlers ──┘  (snapshot, progress, event, status)
+```
+
+| Module | Role |
+|---|---|
+| `api/settings.py` | `ApiSettings`: data dir, camera dir, upload limit, host, port, model, device (environment variables) |
+| `api/db.py` | `sqlite3` schema and repository functions; WAL; foreign keys on; one connection per thread |
+| `api/jobs.py` | `JobManager`, message builders (`progress`, `event`, `status`), live state and subscriber fan-out |
+| `api/main.py` | `create_app(settings, tracker_factory)`; REST routes, WebSocket route, static test page; `app` for uvicorn |
+| `api/models.py` | Pydantic response models |
+| `api/static/index.html` | Demo test page (plain HTML/CSS/JS, no build step, no CDN) |
+| `api/__main__.py` | `python -m api` |
+
+**Job and thread model.** One worker thread processes one video at a time;
+other uploads wait in a FIFO queue. The worker owns its SQLite connection and
+the detector is created once and reused. Route functions are plain `def`, run
+in FastAPI's threadpool, and open a short-lived connection each. WebSocket
+handlers run on the asyncio loop and subscribe to a job's messages; the worker
+hands messages over with `loop.call_soon_threadsafe` onto bounded
+`asyncio.Queue`s (a slow client loses `progress` messages, never `event` or
+`status`). `on_frame` runs after a frame is drawn and written; an exception in
+it fails the job and the worker moves on. Status goes
+`queued → processing → completed | failed | cancelled`; runs left unfinished by
+a previous server process are marked `failed` ("interrupted by server restart")
+at start-up, and shutdown or cancel stops the loop through `should_stop`,
+keeping the partial results.
+
+**SQLite tables** (`data/queuevision.db`): `schema_meta`, `videos`, `events`,
+`waits`, `alerts` and `timeseries`; the last four reference `videos` with
+`ON DELETE CASCADE`. Columns are listed in [api.md](api.md).
+
 ## Dependency rules
 
 ```
@@ -220,6 +264,9 @@ config  ◄── detection/types ◄── queue/*  ◄── pipeline ◄─�
 * Only `detection/detector.py` and `tracking/tracker.py` touch ultralytics,
   and they import it lazily, so the unit-test suite runs without torch. The CI
   `lint-and-unit` job enforces this by not installing it.
+* The dependency points one way: `api` imports `ai_engine`, and `ai_engine`
+  never imports `api`. `run_tracking.process_video` only offers two optional
+  hooks (`on_frame`, `should_stop`); the CLI passes neither and is unchanged.
 * Scripts run directly replace `sys.path[0]` with the project root, because
   `ai_engine/queue` would otherwise shadow the standard-library `queue` module.
 
@@ -249,7 +296,10 @@ config  ◄── detection/types ◄── queue/*  ◄── pipeline ◄─�
 
 ## Extension points for later sprints
 
-* **Sprint 4 (FastAPI, WebSocket, SQLite):** iterate `iter_frame_results()`
+* **Sprint 4 (done; see [api.md](api.md))** runs `process_video` with its
+  `on_frame` hook, so the API gets the annotated video and every CLI output as
+  well as live numbers. The notes below were the plan and still apply to a
+  future live-camera source: iterate `iter_frame_results()`
   directly (a live `VideoLoader` source already exists) and serialize
   `FrameResult` fields, `PersonDetection.to_dict()` and each event's
   `to_dict()`; the contract is [event_schema.md](event_schema.md) (schema
