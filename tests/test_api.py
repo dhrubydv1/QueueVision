@@ -269,3 +269,27 @@ def test_import_does_not_load_torch() -> None:
     code = "import sys, api.main; sys.exit(1 if 'torch' in sys.modules else 0)"
     root = Path(__file__).resolve().parents[1]
     assert subprocess.run([sys.executable, "-c", code], cwd=root).returncode == 0
+
+
+@pytest.mark.integration
+def test_real_yolo_upload_of_cad_clip(tmp_path: Path) -> None:
+    """Default tracker factory (real YOLO11n) processes 60 frames of a local CAD clip."""
+    pytest.importorskip("ultralytics")
+    repo = Path(__file__).resolve().parent.parent
+    clip_path = repo / "datasets" / "raw" / "cad_seq25.mp4"
+    if not clip_path.exists():
+        pytest.skip("datasets/raw/cad_seq25.mp4 not available (local, gitignored dataset clip)")
+    settings = ApiSettings(data_dir=tmp_path / "data", camera_dir=repo / "configs" / "cameras")
+    with TestClient(create_app(settings)) as client:
+        response = upload(client, clip_path, camera="cad_seq25", name="cad_seq25.mp4", max_frames="60")
+        assert response.status_code == 202, response.text
+        video_id = response.json()["video_id"]
+        deadline = time.time() + 120
+        run = client.get(f"/api/videos/{video_id}").json()
+        while run["status"] not in ("completed", "failed", "cancelled") and time.time() < deadline:
+            time.sleep(0.5)
+            run = client.get(f"/api/videos/{video_id}").json()
+        assert run["status"] == "completed", run
+        assert run["frames_processed"] >= 59
+        assert len(client.get(f"/api/videos/{video_id}/timeseries").json()) >= 1
+        assert client.get(f"/api/videos/{video_id}/video").status_code == 200
