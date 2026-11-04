@@ -12,8 +12,8 @@ estimated.
 | Run | Result |
 |---|---|
 | Baseline at the start of Sprint 4 (`main` at `a83ee70`) | **152 passed** |
-| Final, full suite (`pytest -q`, at `beeb972`) | **201 passed**, 0 failed, 0 skipped, no warnings |
-| Final, torch-free venv (`pytest -m "not integration"`, API deps but no torch/ultralytics) | **190 passed**, 11 deselected |
+| Final, full suite (`pytest -q`, at `115f5cb`) | **203 passed**, 0 failed, 0 skipped, no warnings |
+| Final, torch-free venv (`pytest -m "not integration"`, API deps but no torch/ultralytics) | **192 passed**, 11 deselected |
 | `ruff check .` / `ruff format --check .` | clean |
 
 ### Queue-length accuracy on the Collective Activity Dataset (first real queue result)
