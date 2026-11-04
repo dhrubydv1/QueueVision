@@ -99,7 +99,8 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
     def health() -> dict:
         return {
             "status": "ok",
-            "device": settings.device,
+            "device": jobs.loaded_device,
+            "configured_device": settings.device,
             "model": settings.model,
             "queue_depth": jobs.queue_depth,
         }

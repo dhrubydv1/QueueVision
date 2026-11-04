@@ -47,6 +47,11 @@ def default_tracker_factory(settings: ApiSettings) -> TrackerFactory:
                 detector = PersonDetector(settings.model, device=settings.device)
         return PersonTracker(detector, TrackerSettings(new_track_confidence=config.CONFIDENCE))
 
+    def loaded_device() -> str | None:
+        """Device the detector actually runs on; None until the first job loaded it."""
+        return None if detector is None else str(detector.device)
+
+    factory.loaded_device = loaded_device  # type: ignore[attr-defined]
     return factory
 
 
@@ -167,6 +172,12 @@ class JobManager:
         self._live: dict[int, dict] = {}
         self._subs_lock = threading.Lock()
         self._subs: dict[int, list[tuple[asyncio.AbstractEventLoop, asyncio.Queue]]] = {}
+
+    @property
+    def loaded_device(self) -> str | None:
+        """Device of the loaded detector, or None when the factory has not loaded one yet."""
+        getter = getattr(self._factory, "loaded_device", None)
+        return getter() if getter else None
 
     # lifecycle
 
@@ -382,5 +393,5 @@ class JobManager:
         )
         flush()
         db.set_report(conn, video_id, report)
-        stopped = self._should_stop()
+        stopped = bool(report.get("stopped_early"))  # a cancel after the last frame leaves the run completed
         self._finish(conn, video_id, "cancelled" if stopped else "completed")

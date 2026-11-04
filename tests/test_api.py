@@ -67,6 +67,39 @@ def test_health_and_cameras(settings) -> None:
         assert cams["broken"]["error"]
 
 
+def test_health_reports_loaded_device(settings, clip) -> None:
+    def factory():
+        return WalkerTracker()
+
+    factory.loaded_device = lambda: "fake-dev" if state["loaded"] else None  # type: ignore[attr-defined]
+    state = {"loaded": False}
+    with make_client(settings, factory) as client:
+        health = client.get("/api/health").json()
+        assert health["device"] is None and health["configured_device"] == settings.device
+        state["loaded"] = True
+        health = client.get("/api/health").json()
+        assert health["device"] == "fake-dev" and health["configured_device"] == settings.device
+    with make_client(settings) as client:  # a factory without a device getter reports null
+        assert client.get("/api/health").json()["device"] is None
+
+
+def test_cancel_after_last_frame_stays_completed(settings, clip, monkeypatch) -> None:
+    real_set_report = db.set_report
+    holder = {}
+
+    def cancelling_set_report(conn, video_id, report):
+        real_set_report(conn, video_id, report)
+        holder["jobs"].cancel(video_id)  # arrives after process_video returned
+
+    monkeypatch.setattr("api.jobs.db.set_report", cancelling_set_report)
+    with make_client(settings) as client:
+        holder["jobs"] = client.app.state.jobs
+        video_id = upload(client, clip).json()["video_id"]
+        run = wait_status(client, video_id)
+        assert run["status"] == "completed"
+        assert client.get(f"/api/videos/{video_id}/video").status_code == 200
+
+
 def test_upload_with_invalid_and_good_camera(settings, clip) -> None:
     with make_client(settings) as client:
         assert upload(client, clip, camera="broken").status_code == 400

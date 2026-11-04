@@ -9,7 +9,8 @@ from pydantic import BaseModel
 
 class Health(BaseModel):
     status: str
-    device: str
+    device: str | None  # device in use; null until a job has loaded the detector
+    configured_device: str
     model: str
     queue_depth: int
 

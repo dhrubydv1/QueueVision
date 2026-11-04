@@ -140,6 +140,8 @@ function fmtDur(seconds) {
   return Math.floor(total / 3600) + "h " + String(Math.floor((total % 3600) / 60)).padStart(2, "0") + "m";
 }
 const num = (v, d = 1) => (v === null || v === undefined ? "-" : Number(v).toFixed(d));
+// like Python's :g for a median that may be x.5 - integer when whole, else one decimal
+const general = (v) => (Number.isInteger(v) ? String(v) : Number(v).toFixed(1));
 const pct = (v) => (v === null || v === undefined ? "-" : (v * 100).toFixed(0) + "%");
 
 function show(id, on) { $(id).classList.toggle("hidden", !on); }
@@ -195,7 +197,7 @@ function resetRunView(video_id, name) {
 
 function applyLive(m) {
   $("n-people").textContent = m.people_in_frame ?? "-";
-  $("n-queue").textContent = m.queue_length === null ? "unknown" : num(m.queue_length, 0);
+  $("n-queue").textContent = m.queue_length === null ? "unknown" : general(m.queue_length);
   $("n-rate").textContent = m.service_rate_status === "ok" && m.service_rate_per_min !== null
     ? num(m.service_rate_per_min) + "/min" : "insufficient data";
   if (m.prediction_status === "ok" && m.predicted_wait_s !== null) {

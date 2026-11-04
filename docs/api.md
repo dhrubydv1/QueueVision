@@ -79,7 +79,7 @@ Errors use FastAPI's `{"detail": ...}` body with status 400, 404, 409, 413 or 42
 
 | Method and path | Returns |
 |---|---|
-| `GET /api/health` | `status`, `device`, `model`, `queue_depth` |
+| `GET /api/health` | `status`, `device` (the device the loaded detector runs on, e.g. `mps`; `null` until a job has loaded the model), `configured_device` (the `--device` setting, e.g. `auto`), `model`, `queue_depth` |
 | `GET /api/cameras` | One entry per `*.yaml` in the camera directory: `id`, `description`, `has_service_point`, `alerts_enabled`, `error` (set, with the rest empty, for an invalid file) |
 | `POST /api/videos` | `202` and the run record. Multipart form, see below |
 | `GET /api/videos` | All runs, newest first |
@@ -121,7 +121,7 @@ curl -F file=@datasets/raw/cad_seq25.mp4 -F camera_id=cad_seq25 \
 `GET /api/health` (the model path is the absolute path on the machine that ran it, shortened here):
 
 ```json
-{"status": "ok", "device": "auto", "model": ".../ai_engine/models/yolo11n.pt", "queue_depth": 0}
+{"status": "ok", "device": null, "configured_device": "auto", "model": ".../ai_engine/models/yolo11n.pt", "queue_depth": 0}
 ```
 
 `GET /api/cameras` (trimmed to two of the eight entries):
