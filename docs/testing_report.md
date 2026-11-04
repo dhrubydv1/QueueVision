@@ -73,9 +73,32 @@ camera `cad_seq25` via `curl`, WebSocket captured with a Python client:
   time-series rows and 9 waits.
 * `GET /api/videos/1/video` with `Range: bytes=0-999` → 206, 1000 bytes.
 * After a server restart the run was still listed as `completed`.
-* Not verified: the test page in a browser. Chrome automation showed an error
-  page for the local server, although `curl` returned 200; this needs a manual
-  check.
+
+### Browser check of the test page (2026-11-04)
+
+The Chrome extension used earlier could not load the local server, so the page
+was checked with **Playwright 1.58.0 driving headless Chromium 145.0.7632.6**
+against `python -m api` (scratch data directory, real YOLO11n on MPS). Upload:
+a 10 s cut of `cad_seq25.mp4` (302 frames) with camera `cad_seq25`.
+Screenshots of each state were saved to `outputs/browser_check/` (gitignored)
+and inspected.
+
+| Step | Result | Observed |
+|---|---|---|
+| Page loads; camera dropdown lists the 7 `cad_seq*` configs | PASS | cad_seq10, 25, 26, 27, 39, 40, 41 (plus example_queue) |
+| Upload starts a run, head blur on by default | PASS | |
+| Progress bar and live numbers update during processing | PASS | 14 distinct progress texts; people in frame 5–8; service rate "insufficient data", predicted wait "unknown" (clip shorter than `min_history_seconds`) |
+| Run completes | PASS | "Completed 100% (302 / 302 frames)" |
+| Annotated video plays | PASS | 2.00 s played after 2 s; heads blurred in the frames |
+| Seeking uses range requests | PASS | seek to 7.5 s landed at 7.50 s; video responses 200 and 206; no media error |
+| Reopen from "Previous runs" after a page reload | PASS | status completed; summary (4 completed waits, mean 5 s, abandonment 20 %) and 5-row waits table shown |
+| No horizontal scroll at 375 px width | PASS | |
+| No console errors | PASS | |
+
+One script bug was found and fixed during the check (the script tested the
+`hidden` attribute, the page uses a `hidden` CSS class); no page bug was found.
+Cosmetic only: "Previous runs" shows raw ISO timestamps. Not checked: Safari,
+Firefox, real phones.
 
 ## Sprint 3 (2026-11-02)
 
