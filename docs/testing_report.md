@@ -1,8 +1,81 @@
 # Testing Report
 
-Sprint 3 results come first, then Sprint 2; the Sprint 1 report is kept at
-the end. Every number here comes from a command that was actually run on the
-machine described under Sprint 2 (same environment). Nothing was estimated.
+Sprint 4 results come first, then Sprints 3 and 2; the Sprint 1 report is
+kept at the end. Every number here comes from a command that was actually run
+on the machine described under Sprint 2 (same environment). Nothing was
+estimated.
+
+## Sprint 4 (2026-11-04)
+
+### Automated tests
+
+| Run | Result |
+|---|---|
+| Baseline at the start of Sprint 4 (`main` at `a83ee70`) | **152 passed** |
+| Final, full suite (`pytest -q`, at `beeb972`) | **201 passed**, 0 failed, 0 skipped, no warnings |
+| Final, torch-free venv (`pytest -m "not integration"`, API deps but no torch/ultralytics) | **190 passed**, 11 deselected |
+| `ruff check .` / `ruff format --check .` | clean |
+
+### Queue-length accuracy on the Collective Activity Dataset (first real queue result)
+
+Data: the 7 sequences labelled "queueing" (action 4) in the Collective Activity
+Dataset (Choi, Shahid & Savarese, 2009), converted with
+`ai_engine/tools/prepare_cad.py` at an **assumed 30 fps** (the dataset does not
+state its frame rate). Ground truth = number of people labelled queueing in
+each annotated frame (every 10th frame). Prediction = the per-second time
+series from `run_tracking.py` (MPS, `--blur-heads`) with
+`configs/cameras/cad_seqNN.yaml`, matched to the nearest second
+(`evaluate_queue.py`, tolerance 0.6 s).
+
+Method fixed before running: zones drawn by eye on frames of each clip, default
+membership rules (dwell 3 s, speed 0.5 heights/s, grace 1.5 s, 2 s median), no
+tuning on these clips. Scored twice: on every annotated frame, and from 5 s on
+(the first 3 s dwell + 2 s smoothing cannot count anyone, while the labels
+already show a full queue at frame 1).
+
+Smoothed `queue_length`:
+
+| Clip | Labelled frames (≥ 5 s) | Mean labelled queue | MAE all / ≥ 5 s | RMSE ≥ 5 s | Bias ≥ 5 s | Within ±1 ≥ 5 s |
+|---|---|---|---|---|---|---|
+| seq27 (garden path, 60 s) | 166 | 8.5 | 2.32 / 1.85 | 2.24 | +1.47 | 0.43 |
+| seq25 (café counter) | 47 | 5.2 | 2.02 / 0.99 | 1.24 | −0.05 | 0.79 |
+| seq26 (café, handheld) | 59 | 6.7 | 2.28 / 1.31 | 1.65 | +1.10 | 0.71 |
+| seq40 (pier) | 26 | 7.8 | 3.84 / 2.46 | 2.98 | −1.08 | 0.46 |
+| seq41 (lobby) | 56 | 8.8 | 2.23 / 0.88 | 1.20 | +0.41 | 0.79 |
+| seq10 (cafeteria, handheld) | 16 | 5.1 | 2.90 / 1.25 | 1.58 | +1.25 | 0.62 |
+| seq39 (kiosk, moving camera) | 37 | 5.8 | 2.21 / 1.11 | 1.35 | +0.95 | 0.70 |
+| **All 7, pooled** | **407** | | **2.41 / 1.49** | **1.91** | **+0.87** | **0.59** |
+
+Raw (unsmoothed) count, pooled: MAE 2.20 all / 1.53 from 5 s, within ±1 0.64.
+
+Reading the numbers:
+
+* From 5 s on, the count is off by about 1.5 people on queues of 5–9, and within
+  one person on 59 % of labelled frames. It tends to **over-count** (+0.87):
+  the zones are drawn as bands with margin for the handheld cameras, so people
+  standing near the queue (crossing, waiting, talking) are counted too.
+* The worst clip is seq40 (pier), where it under-counts: people overlap heavily
+  in a side view, so the detector misses some.
+* Limits: handheld cameras move the scene under a fixed zone; the dataset's
+  "queueing" label is a human judgement, not our zone rule; 30 fps is assumed;
+  no person IDs, so **waiting-time accuracy is still unmeasured**.
+
+### API end-to-end (real model, MPS)
+
+`python -m api` with a scratch data directory, upload of `cad_seq25.mp4` with
+camera `cad_seq25` via `curl`, WebSocket captured with a Python client:
+
+* 617 frames processed in 30.1 s; status `completed`, percent 100.
+* WebSocket: 1 snapshot, 21 progress, 41 event and 1 final status message,
+  then the server closed the socket.
+* Waits CSV and the per-second time series are byte-identical (apart from the
+  file name) to a CLI run of the same clip; SQLite held 41 events, 21
+  time-series rows and 9 waits.
+* `GET /api/videos/1/video` with `Range: bytes=0-999` → 206, 1000 bytes.
+* After a server restart the run was still listed as `completed`.
+* Not verified: the test page in a browser. Chrome automation showed an error
+  page for the local server, although `curl` returned 200; this needs a manual
+  check.
 
 ## Sprint 3 (2026-11-02)
 
