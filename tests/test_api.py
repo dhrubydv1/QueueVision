@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from api import db
 from api.main import create_app
@@ -75,6 +76,18 @@ def test_upload_with_invalid_and_good_camera(settings, clip) -> None:
         assert upload(client, clip).status_code == 202
 
 
+def test_video_404_before_completion(settings, clip) -> None:
+    reached, release = threading.Event(), threading.Event()
+    with make_client(settings, lambda: GatedTracker(reached, release, block_at=2)) as client:
+        video_id = upload(client, clip).json()["video_id"]
+        assert reached.wait(WAIT)
+        assert client.get(f"/api/videos/{video_id}").json()["status"] == "processing"
+        assert client.get(f"/api/videos/{video_id}/video").status_code == 404
+        release.set()
+        assert wait_status(client, video_id)["status"] == "completed"
+        assert client.get(f"/api/videos/{video_id}/video").status_code == 200
+
+
 def test_full_run_results_match_db(settings, clip) -> None:
     with make_client(settings) as client:
         response = upload(client, clip, frame_stride="1", max_frames="")
@@ -82,7 +95,6 @@ def test_full_run_results_match_db(settings, clip) -> None:
         body = response.json()
         video_id = body["video_id"]
         assert body["status"] in ("queued", "processing") and body["options"]["blur_heads"] is True
-        assert client.get(f"/api/videos/{video_id}/video").status_code == 404
         run = wait_status(client, video_id)
         assert run["status"] == "completed" and run["percent"] == 100.0
         assert run["summary"]["camera_id"] == "walker"
@@ -126,6 +138,22 @@ def test_upload_rejections_leave_nothing(settings, clip) -> None:
         assert not list(small.uploads_dir.iterdir())
 
 
+def test_content_length_over_limit_is_413(settings, clip) -> None:
+    # The file fits the limit, so only the declared Content-Length can trigger the 413.
+    small = replace(settings, max_upload_bytes=clip.stat().st_size + 10)
+    with make_client(small) as client:
+        with open(clip, "rb") as handle:
+            response = client.post(
+                "/api/videos",
+                files={"file": ("clip.mp4", handle, "video/mp4")},
+                data={"camera_id": "walker"},
+                headers={"Content-Length": str(small.max_upload_bytes + 2 * 1024 * 1024)},
+            )
+        assert response.status_code == 413
+        assert client.get("/api/videos").json() == []
+        assert not list(small.uploads_dir.iterdir())
+
+
 def test_unknown_ids_404(settings) -> None:
     with make_client(settings) as client:
         for suffix in ("", "/events", "/waits", "/alerts", "/timeseries", "/report", "/video"):
@@ -150,6 +178,8 @@ def test_websocket_sequence(settings, clip) -> None:
                 messages.append(message)
                 if message["type"] == "status" and message["status"] in ("completed", "failed"):
                     break
+            with pytest.raises(WebSocketDisconnect):
+                ws.receive_json()  # the server closes the socket after the final status
         assert messages[-1]["status"] == "completed" and messages[-1]["percent"] == 100.0
         assert {"progress", "event"} <= {m["type"] for m in messages}
 
@@ -217,6 +247,22 @@ def test_cancel_endpoint(settings, clip) -> None:
         run = wait_status(client, video_id)
         assert run["status"] == "cancelled"
         assert client.get(f"/api/videos/{video_id}/video").status_code == 404
+
+
+def test_test_page_is_served_and_offline(settings) -> None:
+    with make_client(settings) as client:
+        response = client.get("/")
+        assert response.status_code == 200 and "text/html" in response.headers["content-type"]
+        for element_id in ("upload-form", "progress", "live-numbers", "events", "player", "runs"):
+            assert f'id="{element_id}"' in response.text
+        assert "http://" not in response.text and "https://" not in response.text
+        assert client.get("/api/health").status_code == 200  # the static mount does not shadow the API
+
+
+def test_launcher_help_exits_zero() -> None:
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run([sys.executable, "-m", "api", "--help"], cwd=root, capture_output=True, text=True)
+    assert result.returncode == 0 and "--port" in result.stdout and "--reload" in result.stdout
 
 
 def test_import_does_not_load_torch() -> None:

@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QueueVision demo</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1b1f24; --muted: #5b6573; --border: #d5dae1;
+    --accent: #1f6feb; --accent-text: #ffffff; --bar: #e3e7ed; --ok: #1a7f37; --bad: #cf222e; --warn: #9a6700;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151a; --card: #1b2028; --text: #e6e9ee; --muted: #9aa5b4; --border: #333b47;
+      --accent: #4c8dff; --accent-text: #0b0e12; --bar: #2b323d; --ok: #3fb950; --bad: #ff7b72; --warn: #d4a72c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 10px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  section { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+  label { display: block; margin-bottom: 10px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+  input[type=file], select, input[type=number] { width: 100%; max-width: 100%; padding: 6px; color: var(--text);
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+  input[type=number] { width: 90px; }
+  button { padding: 8px 16px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);
+    color: var(--text); font: inherit; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .hidden { display: none; }
+  .msg { margin-top: 8px; color: var(--bad); }
+  .bar { height: 14px; background: var(--bar); border-radius: 7px; overflow: hidden; margin: 8px 0; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .bar.indeterminate > div { width: 35%; animation: slide 1.2s ease-in-out infinite alternate; }
+  @keyframes slide { from { margin-left: 0; } to { margin-left: 65%; } }
+  @media (prefers-reduced-motion: reduce) { .bar.indeterminate > div { animation: none; margin-left: 30%; } }
+  dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 0; }
+  dl > div { border: 1px solid var(--border); border-radius: 6px; padding: 8px; min-width: 0; }
+  dt { color: var(--muted); font-size: .8rem; }
+  dd { margin: 2px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); }
+  .badge.alert { color: var(--bad); border-color: var(--bad); }
+  .badge.fine { color: var(--ok); border-color: var(--ok); }
+  #events { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; font-size: .9rem; }
+  #events li { padding: 4px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  video { width: 100%; max-height: 60vh; background: #000; border-radius: 6px; }
+  #runs { list-style: none; margin: 0; padding: 0; }
+  #runs li { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 6px 0;
+    border-bottom: 1px solid var(--border); }
+  #runs .name { flex: 1 1 160px; overflow-wrap: anywhere; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>QueueVision demo</h1>
+  <p class="sub">Upload a video, watch the queue analysis live, then review the annotated result.</p>
+
+  <section>
+    <h2>Upload a video</h2>
+    <form id="upload-form">
+      <label>Video file
+        <input type="file" id="file" name="file" accept="video/*,.mp4,.avi,.mov,.mkv" required></label>
+      <label>Camera config
+        <select id="camera" name="camera_id" required></select></label>
+      <div class="row">
+        <label>Frame stride (1-10)
+          <input type="number" id="stride" name="frame_stride" min="1" max="10" value="1"></label>
+        <label><input type="checkbox" id="blur" name="blur_heads" checked> Blur heads (privacy)</label>
+      </div>
+      <button type="submit" class="primary" id="start">Start</button>
+      <div id="upload-msg" class="msg" role="alert"></div>
+    </form>
+  </section>
+
+  <section id="progress" class="hidden">
+    <h2>Progress <span id="run-title" class="muted"></span></h2>
+    <div id="bar" class="bar indeterminate"><div></div></div>
+    <div id="progress-text">Queued</div>
+    <div class="row" style="margin-top:8px"><button type="button" id="cancel">Cancel</button></div>
+    <div id="run-error" class="msg" role="alert"></div>
+  </section>
+
+  <section id="live-section" class="hidden">
+    <h2>Live numbers</h2>
+    <dl id="live-numbers">
+      <div><dt>Queue length</dt><dd id="n-queue">-</dd></div>
+      <div><dt>People in frame</dt><dd id="n-people">-</dd></div>
+      <div><dt>Service rate</dt><dd id="n-rate">-</dd></div>
+      <div><dt>Predicted wait</dt><dd id="n-wait">-</dd></div>
+      <div><dt>Alert</dt><dd id="n-alert">-</dd></div>
+    </dl>
+  </section>
+
+  <section id="events-section" class="hidden">
+    <h2>Events</h2>
+    <ul id="events" aria-live="off"></ul>
+  </section>
+
+  <section id="result" class="hidden">
+    <h2>Result</h2>
+    <video id="player" controls preload="metadata"></video>
+    <h2 style="margin-top:14px">Summary</h2>
+    <dl id="summary"></dl>
+    <h2 style="margin-top:14px">Waits</h2>
+    <div class="scroll"><table id="waits">
+      <thead><tr><th>Person</th><th>Track ids</th><th>Joined</th><th>Service</th><th>Wait</th><th>Abandoned</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p id="waits-empty" class="muted hidden">No waits recorded.</p>
+  </section>
+
+  <section>
+    <h2>Previous runs</h2>
+    <ul id="runs"></ul>
+    <p id="runs-empty" class="muted hidden">No runs yet.</p>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const FINAL = ["completed", "failed", "cancelled"];
+let socket = null;
+let currentId = null;
+
+function fmtDur(seconds) {
+  if (seconds === null || seconds === undefined) return "-";
+  const total = Math.max(Math.round(seconds), 0);
+  if (total < 60) return total + "s";
+  if (total < 3600) return Math.floor(total / 60) + "m " + String(total % 60).padStart(2, "0") + "s";
+  return Math.floor(total / 3600) + "h " + String(Math.floor((total % 3600) / 60)).padStart(2, "0") + "m";
+}
+const num = (v, d = 1) => (v === null || v === undefined ? "-" : Number(v).toFixed(d));
+const pct = (v) => (v === null || v === undefined ? "-" : (v * 100).toFixed(0) + "%");
+
+function show(id, on) { $(id).classList.toggle("hidden", !on); }
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  if (!response.ok) {
+    let detail = response.status + " " + response.statusText;
+    try { const body = await response.json(); if (body.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail); } catch (e) { /* keep status text */ }
+    throw new Error(detail);
+  }
+  return response.status === 204 ? null : response.json();
+}
+
+async function loadCameras() {
+  const select = $("camera");
+  try {
+    const cameras = await api("/api/cameras");
+    for (const cam of cameras) {
+      const option = document.createElement("option");
+      option.value = cam.id;
+      option.textContent = cam.error ? cam.id + " (invalid)" : cam.id + (cam.description ? " - " + cam.description : "");
+      option.disabled = Boolean(cam.error);
+      select.appendChild(option);
+    }
+  } catch (error) { $("upload-msg").textContent = "Could not load cameras: " + error.message; }
+}
+
+function setProgress(percent, text) {
+  const bar = $("bar");
+  bar.classList.toggle("indeterminate", percent === null || percent === undefined);
+  bar.firstElementChild.style.width = percent === null || percent === undefined ? "" : percent + "%";
+  $("progress-text").textContent = text;
+}
+
+function progressText(status, percent, done, total) {
+  const frames = total ? " (" + done + " / " + total + " frames)" : done ? " (" + done + " frames)" : "";
+  const label = status.charAt(0).toUpperCase() + status.slice(1);
+  return percent === null || percent === undefined ? label + frames : label + " " + percent + "%" + frames;
+}
+
+function resetRunView(video_id, name) {
+  currentId = video_id;
+  $("run-title").textContent = "#" + video_id + (name ? " " + name : "");
+  $("events").textContent = "";
+  $("run-error").textContent = "";
+  for (const id of ["n-queue", "n-people", "n-rate", "n-wait", "n-alert"]) $(id).textContent = "-";
+  show("progress", true); show("live-section", true); show("events-section", true); show("result", false);
+  show("cancel", false);
+  setProgress(null, "Connecting");
+  $("player").removeAttribute("src");
+}
+
+function applyLive(m) {
+  $("n-people").textContent = m.people_in_frame ?? "-";
+  $("n-queue").textContent = m.queue_length === null ? "unknown" : num(m.queue_length, 0);
+  $("n-rate").textContent = m.service_rate_status === "ok" && m.service_rate_per_min !== null
+    ? num(m.service_rate_per_min) + "/min" : "insufficient data";
+  if (m.prediction_status === "ok" && m.predicted_wait_s !== null) {
+    let text = fmtDur(m.predicted_wait_s);
+    if (m.predicted_wait_low_s !== null && m.predicted_wait_high_s !== null) {
+      text += " (" + fmtDur(m.predicted_wait_low_s) + " - " + fmtDur(m.predicted_wait_high_s) + ")";
+    }
+    $("n-wait").textContent = text;
+  } else {
+    $("n-wait").textContent = m.prediction_status === "insufficient_data" ? "insufficient data" : "unknown";
+  }
+  const alert = $("n-alert");
+  alert.textContent = "";
+  const badge = document.createElement("span");
+  badge.className = "badge " + (m.alert_active ? "alert" : "fine");
+  badge.textContent = m.alert_active ? "Alert: " + (m.alert_reasons || []).join(", ") : "No alert";
+  alert.appendChild(badge);
+}
+
+function addEvent(event) {
+  const parts = [event.event_type, fmtDur(event.timestamp_s)];
+  if (event.person_key) parts.push(event.person_key);
+  else if (event.track_id !== undefined && event.track_id !== null) parts.push("track " + event.track_id);
+  const li = document.createElement("li");
+  li.textContent = parts.join(" - ");
+  const list = $("events");
+  list.appendChild(li);
+  list.scrollTop = list.scrollHeight;
+}
+
+function applyStatus(m) {
+  const percent = m.status === "completed" ? 100 : m.percent;
+  setProgress(percent, progressText(m.status, percent, m.frames_processed, m.frames_total));
+  show("cancel", m.status === "queued" || m.status === "processing");
+  $("run-error").textContent = m.error ? "Error: " + m.error : "";
+  if (m.status === "completed") showResult(m.video_id);
+  if (FINAL.includes(m.status)) loadRuns();
+}
+
+function connect(video_id) {
+  if (socket) { socket.onclose = null; socket.close(); }
+  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(scheme + "//" + location.host + "/ws/videos/" + video_id);
+  socket = ws;
+  ws.onmessage = (ev) => {
+    if (currentId !== video_id) return;
+    const m = JSON.parse(ev.data);
+    if (m.type === "snapshot") {
+      const run = m.run;
+      setProgress(run.percent, progressText(run.status, run.percent, run.frames_processed, run.frames_total));
+      show("cancel", run.status === "queued" || run.status === "processing");
+      if (m.progress) applyLive(m.progress);
+    } else if (m.type === "progress") {
+      setProgress(m.percent, progressText("processing", m.percent, m.frames_processed, m.frames_total));
+      applyLive(m);
+      show("cancel", true);
+    } else if (m.type === "event") {
+      addEvent(m.event);
+    } else if (m.type === "status") {
+      applyStatus(m);
+    }
+  };
+  ws.onclose = (ev) => {
+    if (currentId === video_id && ev.code === 4404) $("run-error").textContent = "Run not found.";
+  };
+}
+
+async function showResult(video_id) {
+  try {
+    const [run, waits, events] = await Promise.all([
+      api("/api/videos/" + video_id), api("/api/videos/" + video_id + "/waits"),
+      api("/api/videos/" + video_id + "/events"),
+    ]);
+    if (currentId !== video_id) return;
+    show("result", true);
+    $("player").src = "/api/videos/" + video_id + "/video";
+    renderSummary(run.summary);
+    renderWaits(waits);
+    if (!$("events").children.length) events.forEach(addEvent);
+  } catch (error) { $("run-error").textContent = "Could not load results: " + error.message; }
+}
+
+function renderSummary(summary) {
+  const dl = $("summary");
+  dl.textContent = "";
+  const waiting = summary && summary.waiting && !summary.waiting.note ? summary.waiting : null;
+  const alerts = summary && summary.alerts;
+  const items = waiting ? [
+    ["Completed waits", waiting.completed],
+    ["Mean wait", waiting.mean_wait_s === null ? "insufficient data" : fmtDur(waiting.mean_wait_s)],
+    ["Median wait", waiting.median_wait_s === null ? "insufficient data" : fmtDur(waiting.median_wait_s)],
+    ["P90 wait", waiting.p90_wait_s === null ? "insufficient data" : fmtDur(waiting.p90_wait_s)],
+    ["Abandonment", waiting.abandonment_rate === null ? "insufficient data" : pct(waiting.abandonment_rate)],
+  ] : [["Waits", summary && summary.waiting ? summary.waiting.note : "unknown"]];
+  if (alerts) items.push(["Alerts", alerts.enabled ? alerts.congestion_starts : "disabled"]);
+  for (const [name, value] of items) {
+    const box = document.createElement("div");
+    const dt = document.createElement("dt"); dt.textContent = name;
+    const dd = document.createElement("dd"); dd.textContent = value ?? "unknown";
+    box.append(dt, dd); dl.appendChild(box);
+  }
+}
+
+function renderWaits(waits) {
+  const body = $("waits").tBodies[0];
+  body.textContent = "";
+  show("waits-empty", waits.length === 0);
+  for (const w of waits) {
+    const tr = document.createElement("tr");
+    const cells = [w.person_key, w.track_ids, fmtDur(w.join_s), w.service_s === null ? "-" : fmtDur(w.service_s),
+      w.wait_s === null ? "-" : fmtDur(w.wait_s), w.abandoned ? "yes" : "no"];
+    for (const text of cells) { const td = document.createElement("td"); td.textContent = text; tr.appendChild(td); }
+    body.appendChild(tr);
+  }
+}
+
+async function loadRuns() {
+  const list = $("runs");
+  try {
+    const runs = await api("/api/videos");
+    list.textContent = "";
+    show("runs-empty", runs.length === 0);
+    for (const run of runs) {
+      const li = document.createElement("li");
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = "#" + run.video_id + " " + run.original_name;
+      const info = document.createElement("span");
+      info.className = "muted";
+      info.textContent = run.status + " - " + run.camera_id + " - " + run.created_at;
+      const open = document.createElement("button");
+      open.type = "button"; open.textContent = "Open";
+      open.addEventListener("click", () => openRun(run.video_id, run.original_name));
+      const del = document.createElement("button");
+      del.type = "button"; del.textContent = "Delete";
+      del.disabled = run.status === "processing";
+      del.addEventListener("click", async () => {
+        try {
+          await api("/api/videos/" + run.video_id, { method: "DELETE" });
+          if (currentId === run.video_id) { currentId = null; if (socket) socket.close(); for (const s of ["progress", "live-section", "events-section", "result"]) show(s, false); }
+          loadRuns();
+        } catch (error) { alert("Could not delete: " + error.message); }
+      });
+      li.append(name, info, open, del);
+      list.appendChild(li);
+    }
+  } catch (error) { list.textContent = "Could not load runs: " + error.message; }
+}
+
+function openRun(video_id, name) {
+  resetRunView(video_id, name);
+  connect(video_id);
+  window.scrollTo({ top: $("progress").offsetTop - 8, behavior: "smooth" });
+}
+
+$("upload-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const msg = $("upload-msg");
+  msg.textContent = "";
+  const form = new FormData();
+  form.append("file", $("file").files[0]);
+  form.append("camera_id", $("camera").value);
+  form.append("frame_stride", $("stride").value || "1");
+  form.append("blur_heads", $("blur").checked ? "true" : "false");
+  $("start").disabled = true;
+  try {
+    const run = await api("/api/videos", { method: "POST", body: form });
+    openRun(run.video_id, run.original_name);
+    loadRuns();
+  } catch (error) { msg.textContent = "Upload failed: " + error.message; }
+  finally { $("start").disabled = false; }
+});
+
+$("cancel").addEventListener("click", async () => {
+  try { await api("/api/videos/" + currentId + "/cancel", { method: "POST" }); }
+  catch (error) { $("run-error").textContent = "Cancel failed: " + error.message; }
+});
+
+loadCameras();
+loadRuns();
+</script>
+</body>
+</html>
