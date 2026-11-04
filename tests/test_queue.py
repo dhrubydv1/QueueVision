@@ -227,3 +227,181 @@ def test_invalid_camera_configs_rejected(tmp_path: Path, text: str, message: str
 def test_missing_camera_config_file(tmp_path: Path) -> None:
     with pytest.raises(CameraConfigError, match="does not exist"):
         load_camera_config(tmp_path / "missing.yaml")
+
+
+# --- sprint 3: schema, config, service point ----------------------------------
+
+
+def test_event_schema_to_dict_is_versioned_and_json_safe() -> None:
+    import json
+
+    from ai_engine.queue import (
+        EVENT_TYPES,
+        SCHEMA_VERSION,
+        CongestionEvent,
+        QueueAbandonEvent,
+        QueueJoinEvent,
+        ServiceStartEvent,
+        ZoneEvent,
+    )
+
+    events = [
+        ZoneEvent("zone_enter", 1, 4.0, 40, 1.0, 10, 4.0),
+        ZoneEvent("zone_exit", 1, 9.0, 90, 1.0, 10, 11.0),
+        QueueJoinEvent("p0001", 1, 1.0, 10, 4.0),
+        ServiceStartEvent("p0001", (1, 2), 12.0, 120, 12.0, 1.0, 11.0),
+        QueueAbandonEvent("p0002", (3,), 8.0, 80, 10.0, 2.0, 6.0),
+        CongestionEvent("congestion_start", 20.0, 200, 20.0, 10.0, ("queue_length",), 9.0, None),
+        CongestionEvent(
+            "congestion_end", 40.0, 400, 40.0, 30.0, ("queue_length", "predicted_wait"), 3.0, 55.5
+        ),
+    ]
+    assert [e.to_dict()["event_type"] for e in events] == list(EVENT_TYPES)
+    for event in events:
+        data = event.to_dict()
+        assert data["schema_version"] == SCHEMA_VERSION == "1.0"
+        assert json.loads(json.dumps(data)) == data
+    assert events[3].to_dict()["track_ids"] == [1, 2]
+    assert events[6].to_dict()["reasons"] == ["queue_length", "predicted_wait"]
+
+
+def test_zone_event_still_importable_from_membership() -> None:
+    from ai_engine.queue import ZoneEvent
+    from ai_engine.queue.membership import ZoneEvent as Reexported
+
+    assert Reexported is ZoneEvent
+
+
+def test_membership_events_carry_entry_frame_and_detection_time() -> None:
+    events, _ = run(new_tracker(), [[person_at(500, 700)]] * 40)
+    (enter,) = events
+    assert enter.zone_entered_frame == 0
+    assert enter.detected_s == pytest.approx(3.0)
+    assert enter.timestamp_s == pytest.approx(3.0)
+
+
+def test_new_config_sections_round_trip(tmp_path: Path) -> None:
+    from ai_engine.queue import AlertSettings, ServiceRateSettings, StitchingSettings
+
+    config = CameraConfig(
+        camera_id="cam",
+        queue_zone=ZONE,
+        service_line=((0.1, 0.9), (0.9, 0.9)),
+        stitching=StitchingSettings(enabled=False, max_gap_seconds=3.0, max_distance_heights=1.5),
+        service_rate=ServiceRateSettings(method="ewma", min_services=3),
+        alerts=AlertSettings(max_queue_length=8, max_predicted_wait_seconds=None),
+    )
+    assert config.alerts.enabled
+    assert not AlertSettings().enabled
+    path = save_camera_config(config, tmp_path / "cam.yaml")
+    assert load_camera_config(path) == config
+    assert "service_zone" not in config.to_dict()
+    zone_config = CameraConfig("cam", ZONE, service_zone=ZONE)
+    assert "service_line" not in zone_config.to_dict()
+    assert load_camera_config(save_camera_config(zone_config, tmp_path / "z.yaml")) == zone_config
+
+
+def test_example_config_loads_with_service_line() -> None:
+    config = load_camera_config(Path(__file__).parents[1] / "configs" / "cameras" / "example_queue.yaml")
+    assert config.service_line is not None and config.alerts.enabled
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"service_zone": [list(p) for p in ZONE], "service_line": [[0.1, 0.9], [0.9, 0.9]]},
+        {"service_line": [[0.1, 0.9], [0.9, 0.9], [0.5, 0.5]]},
+        {"service_line": [[0.1, 1.9], [0.9, 0.9]]},
+        {"service_zone": [[0.1, 0.1], [0.2, 0.2]]},
+        {"service_rate": {"method": "median"}},
+        {"service_rate": {"min_services": 0}},
+        {"service_rate": {"min_services": 1.5}},
+        {"alerts": {"max_queue_length": -1}},
+        {"alerts": {"cooldown_seconds": 0}},
+        {"alerts": {"unknown": 1}},
+        {"stitching": {"enabled": "yes"}},
+        {"stitching": {"max_gap_seconds": -2}},
+    ],
+)
+def test_invalid_new_config_is_rejected(extra: dict) -> None:
+    from ai_engine.queue.camera_config import camera_config_from_dict
+
+    data = {"camera_id": "cam", "queue_zone": [list(p) for p in ZONE], **extra}
+    with pytest.raises(CameraConfigError):
+        camera_config_from_dict(data)
+
+
+def test_service_line_crossing_and_touching() -> None:
+    from ai_engine.queue import ServiceLine
+
+    line = ServiceLine((0.2, 0.8), (0.8, 0.8))
+    size = (1000, 1000)
+    assert line.reached((500, 700), (500, 900), size)  # crosses
+    assert line.reached((500, 900), (500, 700), size)  # either direction
+    assert line.reached((500, 700), (500, 800), size)  # ends on the line
+    assert not line.reached((500, 700), (500, 790), size)
+    assert not line.reached((100, 700), (100, 900), size)  # crosses the extension only
+    assert not line.reached(None, (500, 800), size)
+    assert line.reached((100, 800), (300, 800), size)  # collinear overlap
+
+
+def test_service_zone_containment_and_factory() -> None:
+    from ai_engine.queue import ServiceLine, ServiceZone, service_point_from_config
+
+    zone = ServiceZone(ZONE)
+    assert zone.reached(None, (500, 700), FRAME_SIZE)
+    assert not zone.reached((500, 700), (50, 50), FRAME_SIZE)
+    assert service_point_from_config(CameraConfig("c", ZONE)) is None
+    assert isinstance(service_point_from_config(CameraConfig("c", ZONE, service_zone=ZONE)), ServiceZone)
+    line_config = CameraConfig("c", ZONE, service_line=((0.1, 0.9), (0.9, 0.9)))
+    assert isinstance(service_point_from_config(line_config), ServiceLine)
+
+
+# --- stitching ----------------------------------------------------------------
+
+
+def make_stitcher(enabled: bool = True):
+    from ai_engine.queue import StitchingSettings, TrackStitcher
+
+    return TrackStitcher(QueueZone(ZONE), StitchingSettings(enabled=enabled, max_gap_seconds=2.0))
+
+
+def test_stitcher_links_id_switch_inside_queue() -> None:
+    stitcher = make_stitcher()
+    assert stitcher.update(0.0, [person_at(500, 700, 1)], FRAME_SIZE) == {1: "p0001"}
+    assert stitcher.update(1.0, [], FRAME_SIZE) == {}
+    keys = stitcher.update(1.5, [person_at(520, 700, 2)], FRAME_SIZE)
+    assert keys == {2: "p0001"}
+    assert stitcher.stitch_count == 1
+    assert stitcher.track_ids("p0001") == (1, 2)
+
+
+def test_stitcher_does_not_link_far_late_outside_or_disabled() -> None:
+    far = make_stitcher()
+    far.update(0.0, [person_at(500, 700, 1)], FRAME_SIZE)
+    elsewhere = PersonDetection(bbox=(750, 500, 850, 700), confidence=0.9, track_id=2)
+    assert far.update(0.5, [elsewhere], FRAME_SIZE)[2] == "p0002"
+    assert far.stitch_count == 0
+
+    late = make_stitcher()
+    late.update(0.0, [person_at(500, 700, 1)], FRAME_SIZE)
+    assert late.update(2.5, [person_at(500, 700, 2)], FRAME_SIZE) == {2: "p0002"}
+
+    outside = make_stitcher()
+    outside.update(0.0, [person_at(50, 100, 1)], FRAME_SIZE)  # outside the queue zone
+    assert outside.update(0.5, [person_at(50, 100, 2)], FRAME_SIZE) == {2: "p0002"}
+
+    off = make_stitcher(enabled=False)
+    off.update(0.0, [person_at(500, 700, 1)], FRAME_SIZE)
+    assert off.update(0.5, [person_at(500, 700, 2)], FRAME_SIZE) == {2: "p0002"}
+    assert off.stitch_count == 0
+
+
+def test_stitcher_retired_id_gets_new_key_and_memory_is_bounded() -> None:
+    stitcher = make_stitcher()
+    stitcher.update(0.0, [person_at(500, 700, 1)], FRAME_SIZE)
+    stitcher.update(0.5, [person_at(510, 700, 2)], FRAME_SIZE)  # 1 retired, stitched into p0001
+    keys = stitcher.update(0.6, [person_at(510, 700, 2), person_at(800, 700, 1)], FRAME_SIZE)
+    assert keys[2] == "p0001" and keys[1] == "p0002"
+    stitcher.update(10.0, [], FRAME_SIZE)
+    assert stitcher.track_ids("p0001") == () and stitcher.track_ids("p0002") == ()

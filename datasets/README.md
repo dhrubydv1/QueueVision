@@ -106,6 +106,53 @@ Guidelines:
 - Record the source, licence, resolution and FPS of every new video in the table above.
 - Queue-specific footage (people standing in line) is still needed. MOT17 shows walking pedestrians, not queues.
 
+## Waiting-time ground truth
+
+Waiting-time accuracy needs a manual record of who waited how long. The
+annotation kit (below) writes an empty template next to the queue-count CSV:
+
+```
+datasets/annotations/<name>_waits_gt.csv      # header: person,join_s,service_s,abandoned
+```
+
+(It is not overwritten if it already exists, unless `--force` is given.)
+
+**How to fill it.** Watch the video in a player and write one row per person
+who joins the queue, using the player's video time in seconds:
+
+| Column | Fill with |
+|---|---|
+| `person` | Any label you choose for that person (1, 2, 3, ... or a short description); it is not compared with anything |
+| `join_s` | Time the person joins the back of the queue |
+| `service_s` | Time the person reaches the service point (the same place as the configured service line or zone); leave blank if they were never served |
+| `abandoned` | `true` if they left without being served, otherwise `false` (blank counts as `false`; `1`/`0` and `yes`/`no` also work) |
+
+Skip people who only walk past. Use video time, not wall-clock time, and the
+same convention for every person (for example, the moment the foot reaches the
+back of the queue). Fully blank rows are ignored; an invalid row stops the
+evaluation with its row number.
+
+**Evaluate.**
+
+```bash
+python ai_engine/run_tracking.py --video datasets/raw/clip.mp4 --camera-config configs/cameras/clip.yaml
+python ai_engine/evaluate_waiting.py \
+  --predicted-waits outputs/events/clip_waits.csv \
+  --ground-truth datasets/annotations/clip_waits_gt.csv \
+  --timeseries outputs/timeseries/clip_queue.csv
+```
+
+`--tolerance` (default 3.0 s) is the largest difference between predicted and
+true service time for two records to count as the same person. `--duration`
+and `--output` are optional. The report is written to
+`outputs/metrics/clip_wait_eval.json` by default.
+
+**How much footage.** Aim for at least 3 to 5 clips of 5 to 15 minutes each,
+at least 100 completed waits in total, and a range of queue lengths (quiet,
+normal and busy). Tune settings on some clips and confirm on others. The
+camera's service point must lie inside (or at the edge of) the queue zone,
+otherwise people are recorded as abandoned.
+
 ## Recording queue footage
 
 Real queue footage is needed to measure queue-length accuracy. Read
@@ -132,9 +179,10 @@ python ai_engine/tools/make_annotation_kit.py --video datasets/raw/clip.mp4 \
   --camera-config configs/cameras/clip.yaml --every 5
 ```
 
-This writes `datasets/annotations/clip_frames/` and
+This writes `datasets/annotations/clip_frames/`,
 `datasets/annotations/clip_queue_counts.csv` (`time_s, frame, queue_count`,
-with `queue_count` empty). Look at each frame and enter the number of people
+with `queue_count` empty) and the waiting-time template
+`datasets/annotations/clip_waits_gt.csv` (see above). Look at each frame and enter the number of people
 who are queuing (not passers-by). The tool will not overwrite the CSV unless
 you pass `--force`. Leave a row blank to skip it.
 

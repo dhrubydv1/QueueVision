@@ -1,8 +1,90 @@
 # Testing Report
 
-Sprint 2 results come first; the Sprint 1 report is kept at the end. Every
-number here comes from a command that was actually run on the machine below.
-Nothing was estimated.
+Sprint 3 results come first, then Sprint 2; the Sprint 1 report is kept at
+the end. Every number here comes from a command that was actually run on the
+machine described under Sprint 2 (same environment). Nothing was estimated.
+
+## Sprint 3 (2026-11-02)
+
+### Automated tests
+
+| Run | Result |
+|---|---|
+| Baseline at the start of Sprint 3 (`main` at `4e3ee7a`) | **87 passed**, 0 failed, 0 skipped |
+| Final, full suite (`pytest -q`) | **152 passed**, 0 failed, 0 skipped |
+| Final, torch-free venv (`pytest -m "not integration"`, no torch/ultralytics installed) | **142 passed**, 10 deselected |
+| `ruff check .` / `ruff format --check .` | clean |
+
+### Waiting-time accuracy: PENDING (no labelled queue footage)
+
+There is no real queue footage with ground truth yet, so waiting-time accuracy
+(MAE, median error, missed/extra people), prediction error and the effect of
+ID stitching on accuracy **have not been measured**. `evaluate_waiting.py` is
+implemented and tested on synthetic data only (`tests/test_wait_eval.py`).
+See `datasets/README.md` for how to label footage.
+
+### Smoke runs on MOT17 (street footage, NOT a queue: mechanics only)
+
+Command (MPS, example camera config with a service line at y = 0.9, head blur,
+H.264):
+
+```bash
+python ai_engine/run_tracking.py --video datasets/raw/<clip>.mp4 --device mps \
+  --camera-config configs/cameras/example_queue.yaml --blur-heads \
+  --output outputs/s3_<clip>_stitch_on      # and --no-stitching for _stitch_off
+```
+
+| Run | Stitches | queue_join | service_start | queue_abandon | Still waiting at end | Inference FPS |
+|---|---|---|---|---|---|---|
+| MOT17-09, stitching on | 32 | 10 | 2 | 6 | 2 | 30.88 |
+| MOT17-09, stitching off | 0 | 11 | 1 | 9 | 1 | 31.85 |
+| MOT17-04, stitching on | 7 | 19 | 4 | 7 | 8 | 31.71 |
+| MOT17-04, stitching off | 0 | 21 | 4 | 9 | 8 | 31.79 |
+
+What this shows, and what it does not:
+
+* All seven event types, the waits CSV, the alerts CSV and `events.jsonl` are
+  produced from real tracking output; codec h264 in all runs. Queue-stage cost
+  is small: inference ≈ 31 FPS, the same as Sprint 2 without stitching/alerts.
+* Stitching merges fragmented IDs (fewer joins, fewer abandons). On MOT17-09
+  it also produced one person with 8 chained track IDs over 11 s, which in a
+  dense street crowd is almost certainly a wrong merge. Whether stitching
+  helps accuracy is **unknown** until it is measured on queue footage.
+* The "waits" and "abandons" here are people walking across a street, not
+  queuing; the numbers are not accuracy results.
+* The service rate stayed `insufficient_data` (and predictions `unknown`) for
+  the whole of both clips, as designed: they are 17.5 s and 35 s long, shorter
+  than `min_history_seconds` = 60. No congestion alert fired (max queue length
+  7 ≤ threshold 8).
+
+### Exercise run: prediction and alert paths
+
+To exercise the paths that the clip length prevents, MOT17-04 was run with a
+test copy of the config (`min_history_seconds` 10, `min_services` 1,
+`max_queue_length` 4, `min_duration_seconds` 3; output `outputs/s3_exercise`):
+
+* `congestion_start` at 10.9 s (condition since 7.9 s, queue length 6) and
+  `congestion_end` at 22.0 s (condition cleared since 19.0 s).
+* From 18 s the service rate became `ok` (e.g. 10.0/min at 18 s, predicted wait
+  42.0 s, range 41.1–120.9 s; 6.43/min at 28 s, 37.3 s, range 23.5–69.1 s).
+* The overlay showed the service line, the predicted wait with its range and
+  the congestion banner; the banner overlapped the panel title, which was then
+  fixed by drawing it at the opposite edge from the panel.
+* This run averaged 19.16 inference FPS against ≈31 for the identical clip
+  minutes earlier; the machine was under other load at the time, so it is not
+  a benchmark.
+
+### Not tested / pending (Sprint 3)
+
+* Waiting-time, prediction and throughput accuracy on real labelled footage.
+* Effect of stitching on accuracy (only stitch counts are reported above).
+* Interactive (mouse) mode of `draw_zone.py --target service_line|service_zone`;
+  the headless `--points` mode is tested.
+* Webcam: still covered by a mocked capture only.
+
+---
+
+# Sprint 2
 
 ## Execution environment (Sprint 2, 2026-11-02)
 

@@ -24,9 +24,16 @@ what it does not, and what you must do before pointing a camera at anyone.
 | Annotated video with `--blur-heads` | Same, with the top fraction of every person box blurred | Reduced, not removed (see limitations) |
 | Track IDs | Temporary per-video integers from ByteTrack; they restart at 1 for each video and change after occlusion | Not an identity |
 | MOT track file (`outputs/tracks/`) | Frame number, track ID, box coordinates, score | Low: boxes and numbers only |
-| Queue CSVs (`outputs/timeseries/`, `outputs/events/`) | Times, counts, track IDs, zone entry times | Low: no images |
+| Queue CSVs (`outputs/timeseries/`, `outputs/events/`) | Times, counts, track IDs, zone entry times, wait durations | Low: no images |
+| Event log and waits (`outputs/events/<name>_events.jsonl`, `<name>_waits.csv`, `<name>_alerts.csv`) | Event times, anonymous `person_key`, track IDs, wait durations, queue lengths | Low: no identities, no images |
 | Metrics JSON (`outputs/metrics/`) | Counts, timings, settings, file paths | Low |
 | Annotation frames (`datasets/annotations/<name>_frames/`) | Still images from the footage | **Yes** |
+
+Events and waits contain **no identities**. `person_key` (`p0001`, `p0002`,
+...) is an anonymous counter that restarts for every video; it is only used to
+tie together the tracks of one person inside one video (ID-switch stitching)
+and cannot be linked to a real person or to another video. **No images** are
+stored in events, waits or alerts. See [event_schema.md](event_schema.md).
 
 The system does **not** save face crops, cropped person images or appearance
 features (no re-identification model is used), and it does not identify or
