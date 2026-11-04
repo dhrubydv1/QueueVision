@@ -1,0 +1,38 @@
+camera_id: cad_seq27
+description: 'CAD seq27: outdoor line along a garden path (head at the rope, left).
+  Zone drawn on frames of the clip; 30 fps assumed.'
+queue_zone:
+- - 0.06
+  - 0.5
+- - 0.94
+  - 0.5
+- - 0.94
+  - 0.76
+- - 0.06
+  - 0.76
+service_line:
+- - 0.09
+  - 0.5
+- - 0.09
+  - 0.76
+membership:
+  min_dwell_seconds: 3.0
+  max_speed_heights_per_second: 0.5
+  exit_grace_seconds: 1.5
+smoothing:
+  window_seconds: 2.0
+stitching:
+  enabled: true
+  max_gap_seconds: 2.0
+  max_distance_heights: 1.0
+service_rate:
+  method: window
+  window_seconds: 300.0
+  ewma_time_constant_seconds: 120.0
+  min_history_seconds: 60.0
+  min_services: 2
+alerts:
+  max_queue_length: 8
+  max_predicted_wait_seconds: 300
+  min_duration_seconds: 10.0
+  cooldown_seconds: 60.0

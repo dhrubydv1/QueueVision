@@ -29,6 +29,7 @@ import logging
 import platform
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,7 +56,7 @@ from ai_engine.metrics.queue_outputs import (
     ZoneEventWriter,
 )
 from ai_engine.pipeline import iter_frame_results, source_fps
-from ai_engine.queue.analyzer import QueueAnalyzer
+from ai_engine.queue.analyzer import QueueAnalyzer, QueueFrameState
 from ai_engine.queue.camera_config import CameraConfig, CameraConfigError, load_camera_config
 from ai_engine.tracking.tracker import PersonTracker, TrackerSettings
 from ai_engine.utils.device import DeviceUnavailableError
@@ -104,6 +105,18 @@ class RunOptions:
             raise ValueError("head_fraction must be in (0, 1]")
 
 
+@dataclass(frozen=True)
+class FrameUpdate:
+    """Progress report passed to the ``on_frame`` callback of :func:`process_video`."""
+
+    frame_index: int  # source frame index
+    frames_total: int | None
+    timestamp_s: float
+    people_in_frame: int
+    processing_fps: float  # running average
+    queue: QueueFrameState | None
+
+
 def model_display_name(model_path: Path) -> str:
     """Turn ``yolo11n.pt`` into ``YOLO11n`` for reports."""
     stem = model_path.stem
@@ -139,10 +152,14 @@ def process_video(
     options: RunOptions | None = None,
     run_started_at: float | None = None,
     extra_report: dict[str, Any] | None = None,
+    on_frame: Callable[[FrameUpdate], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Track people through one video and write the annotated MP4, metrics and CSVs.
 
-    Returns the metrics report that was saved to disk.
+    ``on_frame`` is called after each processed frame is drawn and written. ``should_stop`` is
+    checked after ``on_frame``; returning True ends the run like pressing ``q`` (outputs are
+    still written). Returns the metrics report that was saved to disk.
     """
     options = options or RunOptions()
     run_started_at = run_started_at if run_started_at is not None else time.perf_counter()
@@ -263,6 +280,21 @@ def process_video(
                     performance.average_inference_fps,
                     performance.average_processing_fps,
                 )
+
+            if on_frame:
+                on_frame(
+                    FrameUpdate(
+                        frame_index=result.frame_index,
+                        frames_total=metadata.frame_count or None,
+                        timestamp_s=result.timestamp_s,
+                        people_in_frame=len(people),
+                        processing_fps=performance.average_processing_fps,
+                        queue=queue,
+                    )
+                )
+            if should_stop and should_stop():
+                stopped_early = True
+                break
 
             # Display time is deliberately excluded from processing FPS.
             if options.show:

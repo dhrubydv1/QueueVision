@@ -1,4 +1,4 @@
-# Implementation Notes (Sprint 3)
+# Implementation Notes (Sprint 4)
 
 Sprint 1 modules that did not change in purpose (`utils/device.py`,
 `metrics/performance.py`, the basics of `VideoLoader`/`VideoWriter`) are
@@ -123,6 +123,38 @@ and prediction columns), `ZoneEventWriter` (zone events only), `WaitsWriter`,
   `read_timeseries_predictions()`, `match_by_service_time()` (one-to-one,
   nearest service time within the tolerance), `evaluate_waits()`,
   `evaluate_predictions()`, `evaluate_throughput()`.
+
+### `ai_engine/run_tracking.py` hooks (Sprint 4)
+* `process_video(..., on_frame=None, should_stop=None)`. `on_frame` receives a
+  frozen `FrameUpdate` (`frame_index`, `frames_total`, `timestamp_s`,
+  `people_in_frame`, `processing_fps`, `queue`) after the frame has been drawn
+  and written. `should_stop` is polled like the `q` key of `--show`; when it
+  returns true the loop ends and the files and report for the processed part
+  are still written. The CLI passes neither, and its outputs are unchanged.
+
+### `api/` (Sprint 4)
+* `settings.ApiSettings`: frozen dataclass; `from_env()` reads
+  `QUEUEVISION_DATA_DIR`, `QUEUEVISION_CAMERA_DIR`, `QUEUEVISION_MAX_UPLOAD_MB`,
+  `QUEUEVISION_HOST`, `QUEUEVISION_PORT`, `QUEUEVISION_MODEL`, `QUEUEVISION_DEVICE`.
+* `db`: `connect` (WAL, foreign keys), `init_db`, and small repository
+  functions for videos, events (which also fill `waits` and `alerts`), time
+  series and reports; `mark_interrupted` runs at start-up.
+* `jobs.JobManager`: `start`, `stop`, `submit`, `cancel`, `subscribe`,
+  `live_state`, `queue_depth`. The worker thread loads the camera config,
+  builds a tracker from the factory, calls `process_video` and stores results
+  once per second of video time. `default_tracker_factory` loads the detector
+  once; tests pass a fake factory, so API tests need no torch.
+* `main.create_app(settings, tracker_factory)`: REST routes, `WS /ws/videos/{id}`
+  and the static test page. Upload is streamed to disk in 1 MiB chunks with a
+  size check; `GET /api/videos/{id}/video` is a `FileResponse` (range requests).
+* Full endpoint and message reference: [api.md](api.md).
+
+### `ai_engine/tools/prepare_cad.py` (Sprint 4)
+* `--source` (zip or folder), `--sequences` (default 10 25 26 27 39 40 41),
+  `--fps` (default 30, an assumption), `--video-dir`, `--annotation-dir`,
+  `--force`. Writes `cad_seqNN.mp4`, `cad_seqNN_queue_counts.csv` and
+  `cad_seqNN.json` (records `fps_assumed`). Reads only
+  `seqNN/frameN.jpg` and `seqNN/annotations.txt` from the zip, in memory.
 
 ### Command-line programs
 * `run_tracking.py`: flags are listed in the README. `RunOptions` and

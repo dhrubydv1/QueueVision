@@ -2,7 +2,7 @@
 
 Raw and processed videos and all annotation files are **not committed to Git**
 (see `.gitignore`). Only this README and the empty folder skeleton are tracked.
-**No real queue footage exists yet**; only MOT17 walking pedestrians are available.
+**No footage of a real deployment exists yet**; MOT17 (walking pedestrians) and the Collective Activity Dataset (short queueing clips, below) are the only data used so far.
 
 ```
 datasets/
@@ -26,6 +26,64 @@ were **not** downloaded.
 [Creative Commons Attribution-NonCommercial-ShareAlike 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/).
 They may be used for this academic, non-commercial project with attribution.
 Cite: Milan et al., *MOT16: A Benchmark for Multi-Object Tracking*, arXiv:1603.00831.
+
+## Collective Activity Dataset (Sprint 4 demo and queue-length check)
+
+Short clips that include people standing in line; used for the demo and as a
+first queue-length check. Nothing from it is committed.
+
+| Item | Value |
+|---|---|
+| Source | Project page: https://cvgl.stanford.edu/projects/collective/collectiveActivity.html |
+| Content | 44 sequences of JPEG frames, 720×480 |
+| Annotations | Every 10th frame, one row per person: `frame x y w h action pose`. Actions: 1 NA, 2 crossing, 3 waiting, 4 queueing, 5 walking, 6 talking |
+| Person IDs | None, so there is **no waiting-time ground truth**; queue length is available (number of people labelled 4 in an annotated frame) |
+| Queueing sequences | 10, 25, 26, 27, 39, 40, 41 |
+| Frame rate | **Not stated by the dataset.** `prepare_cad.py` assumes 30 fps (`--fps`); every time value depends on this assumption |
+| Git | Never commit its frames or videos (this repository is public); `datasets/raw/` and `datasets/annotations/` are git-ignored |
+
+**Licence / terms.** This README does not state a licence for the dataset.
+Check the dataset's terms of use on the project page before redistributing
+the data or anything derived from it (including the converted videos).
+
+**Citation.** W. Choi, K. Shahid, S. Savarese, "What are they doing?:
+Collective activity classification using spatio-temporal relationship among
+people", VSWS 2009 (with ICCV).
+
+**Prepare the clips.** Download `ActivityDataset.zip` yourself from the project
+page, then from the repository root:
+
+```bash
+python ai_engine/tools/prepare_cad.py --source ~/Downloads/ActivityDataset.zip
+# or a subset: --sequences 25 27   (default: 10 25 26 27 39 40 41)
+# other options: --fps 30 (assumed), --video-dir, --annotation-dir, --force
+```
+
+For each sequence it writes `datasets/raw/cad_seqNN.mp4`,
+`datasets/annotations/cad/cad_seqNN_queue_counts.csv` (`time_s, frame,
+queue_count`, one row per annotated frame, the format `evaluate_queue.py`
+reads) and `datasets/annotations/cad/cad_seqNN.json` (records the assumed
+fps). Only `seqNN/frameN.jpg` and `seqNN/annotations.txt` are read from the
+zip, in memory; the zip is treated as untrusted. It will not overwrite
+existing outputs unless `--force` is given.
+
+**Camera configs.** `configs/cameras/cad_seq10.yaml`, `cad_seq25`, `cad_seq26`,
+`cad_seq27`, `cad_seq39`, `cad_seq40` and `cad_seq41` hold a queue zone and a
+service point per sequence (committed; they contain no images). The cameras
+are handheld, so zones have generous margins; seq39 moves the most.
+
+**Demo and check.**
+
+```bash
+python -m api        # upload datasets/raw/cad_seq27.mp4 with camera cad_seq27 at http://127.0.0.1:8000
+python ai_engine/run_tracking.py --video datasets/raw/cad_seq25.mp4 --camera-config configs/cameras/cad_seq25.yaml
+python ai_engine/evaluate_queue.py --predicted outputs/timeseries/cad_seq25_queue.csv \
+  --annotations datasets/annotations/cad/cad_seq25_queue_counts.csv
+```
+
+Results are in [docs/testing_report.md](../docs/testing_report.md). Limits to
+keep in mind: handheld cameras, the dataset's "queueing" label versus this
+project's zone-based membership rule, and the fps assumption.
 
 ## Reproduce the downloads
 
