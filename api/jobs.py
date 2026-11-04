@@ -26,7 +26,7 @@ from api.settings import ApiSettings
 LOGGER = logging.getLogger("queuevision.api")
 
 SCHEMA_VERSION = "1.0"
-SUBSCRIBER_QUEUE_SIZE = 256
+SUBSCRIBER_QUEUE_SIZE = 256  # progress backlog bound; event/status messages are never dropped
 FINAL_STATUSES = ("completed", "failed", "cancelled")
 
 TrackerFactory = Callable[[], Any]
@@ -57,16 +57,17 @@ def _round(value: float | None, digits: int) -> float | None:
     return None if value is None else round(value, digits)
 
 
-def progress_message(video_id: int, update: FrameUpdate, frames_processed: int = 0) -> dict[str, Any]:
+def progress_message(video_id: int, update: FrameUpdate) -> dict[str, Any]:
     """Live numbers for one frame (sent about once per video second)."""
     queue = update.queue
     total = update.frames_total
-    percent = min(100.0, round(100.0 * (update.frame_index + 1) / total, 1)) if total else None
+    frames_done = update.frame_index + 1  # source frames, matching the overlay's frame number
+    percent = min(100.0, round(100.0 * frames_done / total, 1)) if total else None
     message: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "type": "progress",
         "video_id": video_id,
-        "frames_processed": frames_processed,
+        "frames_processed": frames_done,
         "frames_total": total,
         "percent": percent,
         "video_time_s": round(update.timestamp_s, 3),
@@ -140,21 +141,9 @@ def _timeseries_row(update: FrameUpdate) -> dict[str, Any]:
 
 
 def _put(queue: asyncio.Queue, message: dict) -> None:
-    """Runs on the subscriber's loop. When full, only ``progress`` is dropped."""
-    try:
-        queue.put_nowait(message)
+    """Runs on the subscriber's loop. Only ``progress`` is dropped, once the backlog is full."""
+    if message["type"] == "progress" and queue.qsize() >= SUBSCRIBER_QUEUE_SIZE:
         return
-    except asyncio.QueueFull:
-        pass
-    if message["type"] == "progress":
-        return
-    pending = queue._queue
-    for item in pending:
-        if item["type"] == "progress":
-            pending.remove(item)
-            break
-    else:
-        pending.popleft()
     queue.put_nowait(message)
 
 
@@ -173,6 +162,7 @@ class JobManager:
         self._cancel_current = threading.Event()
         self._stop = threading.Event()
         self._ready = threading.Event()
+        self._start_error: BaseException | None = None
         self._thread: threading.Thread | None = None
         self._live: dict[int, dict] = {}
         self._subs_lock = threading.Lock()
@@ -186,7 +176,11 @@ class JobManager:
             return
         self._thread = threading.Thread(target=self._run, name="queuevision-worker", daemon=True)
         self._thread.start()
-        self._ready.wait()
+        if not self._ready.wait(30.0):
+            raise RuntimeError("job worker did not start")
+        if self._start_error is not None:
+            self._thread = None
+            raise self._start_error
 
     def stop(self, timeout: float = 30.0) -> None:
         """Ask the worker to stop; the current job ends ``cancelled``."""
@@ -249,7 +243,7 @@ class JobManager:
     def subscribe(
         self, video_id: int, loop: asyncio.AbstractEventLoop
     ) -> tuple[asyncio.Queue, Callable[[], None]]:
-        queue: asyncio.Queue = asyncio.Queue(maxsize=SUBSCRIBER_QUEUE_SIZE)
+        queue: asyncio.Queue = asyncio.Queue()
         entry = (loop, queue)
         with self._subs_lock:
             self._subs.setdefault(video_id, []).append(entry)
@@ -274,8 +268,9 @@ class JobManager:
     # worker
 
     def _run(self) -> None:
-        conn = db.connect(self.settings.db_path)
+        conn = None
         try:
+            conn = db.connect(self.settings.db_path)
             db.init_db(conn)
             db.mark_interrupted(conn)
             self._ready.set()
@@ -291,14 +286,23 @@ class JobManager:
                     self._process(conn, video_id)
                 except Exception as error:
                     LOGGER.exception("Job %s failed", video_id)
-                    self._finish(conn, video_id, "failed", str(error) or type(error).__name__)
+                    try:
+                        self._finish(conn, video_id, "failed", str(error) or type(error).__name__)
+                    except Exception:
+                        LOGGER.exception("Could not record failure of job %s", video_id)
                 finally:
                     with self._cond:
                         self._current = None
                         self._cond.notify_all()
+        except BaseException as error:
+            if not self._ready.is_set():
+                self._start_error = error
+            else:
+                LOGGER.exception("Job worker stopped unexpectedly")
         finally:
             self._ready.set()
-            conn.close()
+            if conn is not None:
+                conn.close()
 
     def _finish(self, conn, video_id: int, status: str, error: str | None = None) -> None:
         db.set_status(conn, video_id, status, error)
@@ -334,20 +338,20 @@ class JobManager:
 
         events: list[dict] = []
         rows: list[dict] = []
-        state = {"frames": 0, "next_second": 0}
+        state = {"frames": 0, "next_second": 0}  # frames: source frames done
 
         def flush() -> None:
-            with conn:  # one transaction for the batch (db helpers nest inside it)
+            with conn:  # one transaction for the whole batch
                 if events:
-                    db.add_events(conn, video_id, events)
+                    db.add_events(conn, video_id, events, commit=False)
                 if rows:
-                    db.add_timeseries(conn, video_id, rows)
-                db.set_progress(conn, video_id, state["frames"])
+                    db.add_timeseries(conn, video_id, rows, commit=False)
+                db.set_progress(conn, video_id, state["frames"], commit=False)
             events.clear()
             rows.clear()
 
         def on_frame(update: FrameUpdate) -> None:
-            state["frames"] += 1
+            state["frames"] = update.frame_index + 1
             queue = update.queue
             if queue is not None:
                 for event in queue.events:
@@ -359,7 +363,7 @@ class JobManager:
                 if queue is not None:
                     rows.append(_timeseries_row(update))
                 flush()
-                message = progress_message(video_id, update, state["frames"])
+                message = progress_message(video_id, update)
                 self._live[video_id] = message
                 self._publish(video_id, message)
 

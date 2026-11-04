@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from api import db
-from api.jobs import JobManager, progress_message
+from api.jobs import SUBSCRIBER_QUEUE_SIZE, JobManager, progress_message
 from api.settings import ApiSettings
 from tests.conftest import FakeTracker, WalkerTracker, write_synthetic_video
 
@@ -207,9 +207,120 @@ def test_stop_cancels_current_job(settings, conn, manager) -> None:
     video_id = add_video(settings, conn)
     jobs.submit(video_id)
     assert reached.wait(WAIT)
+    stopper = threading.Thread(target=jobs.stop, kwargs={"timeout": WAIT})
+    stopper.start()
+    assert jobs._stop.wait(WAIT)  # the stop flag is set while the job is still blocked
     release.set()
-    jobs.stop(timeout=WAIT)
-    assert db.get_video(conn, video_id)["status"] in ("cancelled", "completed")
+    stopper.join(WAIT)
+    assert not stopper.is_alive()
+    record = db.get_video(conn, video_id)
+    assert record["status"] == "cancelled"
+    assert 0 < record["frames_processed"] < 60
+
+
+def test_frame_stride_progress_counts_source_frames(settings, conn, manager) -> None:
+    jobs = manager(FakeTracker)
+    video_id = add_video(settings, conn, options={"frame_stride": 2})
+
+    async def scenario() -> list[dict]:
+        queue, unsubscribe = jobs.subscribe(video_id, asyncio.get_running_loop())
+        jobs.submit(video_id)
+        out = []
+        while True:
+            message = await asyncio.wait_for(queue.get(), WAIT)
+            out.append(message)
+            if message["type"] == "status" and message["status"] == "completed":
+                break
+        unsubscribe()
+        return out
+
+    messages = asyncio.run(scenario())
+    last = [m for m in messages if m["type"] == "progress"][-1]
+    record = db.get_video(conn, video_id)
+    assert record["frames_total"] == 60
+    assert record["frames_processed"] == 59  # last processed source frame index 58, plus one
+    assert last["frames_processed"] <= 59 and last["frames_processed"] > 30
+    assert last["percent"] == pytest.approx(100.0 * last["frames_processed"] / 60, abs=0.1)
+
+
+def test_flush_is_one_transaction(settings, conn, manager, monkeypatch) -> None:
+    commits = []
+    real_connect = db.connect
+
+    class Spy:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def __enter__(self):
+            return self._inner.__enter__()
+
+        def __exit__(self, *exc):
+            commits.append(1)
+            return self._inner.__exit__(*exc)
+
+    monkeypatch.setattr(db, "connect", lambda path: Spy(real_connect(path)))
+    jobs = manager(FakeTracker)
+    video_id = add_video(settings, conn)
+    commits.clear()
+    jobs.submit(video_id)
+    assert jobs.wait_idle(WAIT)
+    # 6 per-second flushes + final flush + processing/set_media/report/completed: far fewer than 3 per flush
+    flushes = len(db.list_timeseries(conn, video_id)) + 1
+    assert len(commits) <= flushes + 6
+
+
+def test_full_queue_never_drops_event_or_status() -> None:
+    from api.jobs import _put, event_message
+
+    async def scenario() -> None:
+        queue: asyncio.Queue = asyncio.Queue()
+        for _ in range(SUBSCRIBER_QUEUE_SIZE):
+            _put(queue, progress_message(1, _update()))
+        _put(queue, progress_message(1, _update()))
+        assert queue.qsize() == SUBSCRIBER_QUEUE_SIZE
+        _put(queue, event_message(1, {"event_type": "x"}))
+        _put(queue, {"type": "status", "status": "completed"})
+        assert queue.qsize() == SUBSCRIBER_QUEUE_SIZE + 2
+
+    asyncio.run(scenario())
+
+
+def test_worker_survives_db_failure_while_recording_failure(settings, conn, manager, monkeypatch) -> None:
+    real_progress, real_status = db.set_progress, db.set_status
+    state = {"progress_failed": False}
+
+    def bad_progress(*args, **kwargs):
+        if not state["progress_failed"]:
+            state["progress_failed"] = True
+            raise RuntimeError("disk error")
+        return real_progress(*args, **kwargs)
+
+    def bad_status(conn_, video_id, status, error=None):
+        if status == "failed":
+            raise RuntimeError("disk error again")
+        return real_status(conn_, video_id, status, error)
+
+    monkeypatch.setattr(db, "set_progress", bad_progress)
+    monkeypatch.setattr(db, "set_status", bad_status)
+    jobs = manager(FakeTracker)
+    first = add_video(settings, conn)
+    second = add_video(settings, conn)
+    jobs.submit(first)
+    jobs.submit(second)
+    assert jobs.wait_idle(WAIT)
+    assert db.get_video(conn, second)["status"] == "completed"
+
+
+def test_start_raises_when_database_unavailable(tmp_path) -> None:
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file, not a directory")
+    bad = ApiSettings(data_dir=blocker / "data", camera_dir=tmp_path)
+    jobs = JobManager(bad, FakeTracker)
+    with pytest.raises(OSError):
+        jobs.start()
 
 
 def test_tracker_factory_error_fails_job(settings, conn, manager) -> None:
@@ -239,7 +350,7 @@ def test_full_subscriber_queue_drops_progress_but_keeps_status(settings, conn, m
 
     async def scenario() -> dict:
         queue, unsubscribe = jobs.subscribe(video_id, asyncio.get_running_loop())
-        for _ in range(queue.maxsize):
+        for _ in range(SUBSCRIBER_QUEUE_SIZE):
             queue.put_nowait(progress_message(video_id, _update()))
         jobs.submit(video_id)
         assert await asyncio.get_running_loop().run_in_executor(None, jobs.wait_idle, WAIT)

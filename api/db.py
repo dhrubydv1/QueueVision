@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -94,6 +95,16 @@ _FINISHED = ("completed", "failed", "cancelled")
 _JSON_COLUMNS = ("options", "report")
 
 
+@contextlib.contextmanager
+def _txn(conn: sqlite3.Connection, commit: bool):
+    """Commit on exit (``with conn``), or leave the transaction open for the caller when not ``commit``."""
+    if commit:
+        with conn:
+            yield
+    else:
+        yield
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -149,16 +160,16 @@ def set_media(
         )
 
 
-def set_progress(conn: sqlite3.Connection, video_id: int, frames_processed: int) -> None:
-    with conn:
+def set_progress(conn: sqlite3.Connection, video_id: int, frames_processed: int, commit: bool = True) -> None:
+    with _txn(conn, commit):
         conn.execute(
             "UPDATE videos SET frames_processed = ? WHERE video_id = ?", (frames_processed, video_id)
         )
 
 
-def add_events(conn: sqlite3.Connection, video_id: int, events: list[dict]) -> None:
+def add_events(conn: sqlite3.Connection, video_id: int, events: list[dict], commit: bool = True) -> None:
     """Store event payloads, plus a wait row per service/abandon and an alert row per congestion event."""
-    with conn:
+    with _txn(conn, commit):
         for ev in events:
             kind = ev["event_type"]
             conn.execute(
@@ -208,10 +219,10 @@ def add_events(conn: sqlite3.Connection, video_id: int, events: list[dict]) -> N
                 )
 
 
-def add_timeseries(conn: sqlite3.Connection, video_id: int, rows: list[dict]) -> None:
+def add_timeseries(conn: sqlite3.Connection, video_id: int, rows: list[dict], commit: bool = True) -> None:
     columns = ", ".join(TIMESERIES_COLUMNS)
     marks = ", ".join("?" for _ in range(len(TIMESERIES_COLUMNS) + 1))
-    with conn:
+    with _txn(conn, commit):
         conn.executemany(
             f"INSERT INTO timeseries (video_id, {columns}) VALUES ({marks})",
             [(video_id, *(row.get(name) for name in TIMESERIES_COLUMNS)) for row in rows],
