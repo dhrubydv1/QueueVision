@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 import pytest
 
+from ai_engine import run_tracking
 from ai_engine.detection.types import PersonDetection
 from ai_engine.pipeline import iter_frame_results
 from ai_engine.queue.camera_config import (
@@ -25,45 +26,21 @@ from ai_engine.queue.camera_config import (
     StitchingSettings,
     load_camera_config,
 )
-from ai_engine.run_tracking import RunOptions, output_paths, parse_arguments, process_video
+from ai_engine.run_tracking import FrameUpdate, RunOptions, output_paths, parse_arguments, process_video
 from ai_engine.tools.draw_zone import main as draw_zone_main
 from ai_engine.tools.make_annotation_kit import make_kit
 from ai_engine.video.transcode import reencode_h264
 from ai_engine.video.video_loader import VideoLoader
 from ai_engine.visualization.privacy import blur_heads
-from tests.conftest import SYNTHETIC_FPS, SYNTHETIC_SIZE, write_synthetic_video
+from tests.conftest import (
+    SYNTHETIC_FPS,
+    SYNTHETIC_SIZE,
+    FakeTracker,
+    WalkerTracker,
+    write_synthetic_video,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-
-class FakeDetector:
-    device = "cpu"
-    model_path = Path("yolo11n.pt")
-    confidence = 0.35
-    image_size = 640
-
-
-class FakeTracker:
-    """MOCKED tracker: one person standing still in the frame centre."""
-
-    def __init__(self) -> None:
-        self.detector = FakeDetector()
-        self.last_inference_seconds = 0.001
-        self.updates = 0
-        self.configured_fps: float | None = None
-
-    def configure(self, effective_fps: float) -> None:
-        self.configured_fps = effective_fps
-
-    def warmup(self, frame_shape: tuple[int, int, int]) -> None:
-        pass
-
-    def update(self, frame: np.ndarray) -> list[PersonDetection]:
-        self.updates += 1
-        return [PersonDetection(bbox=(60, 30, 100, 110), confidence=0.8, track_id=1)]
-
-    def describe(self) -> dict[str, Any]:
-        return {"type": "fake"}
 
 
 CAMERA = CameraConfig(
@@ -134,26 +111,6 @@ def test_process_video_without_camera_has_no_queue_outputs(synthetic_video: Path
 
 
 # --- waiting-time scenario ----------------------------------------------------
-
-
-class WalkerTracker(FakeTracker):
-    """MOCKED tracker: one person steps into the zone, stands still, then walks over the service line.
-
-    At 10 FPS in a 160x128 frame: outside the zone for frames 0-4, standing at x=40 (inside the
-    left 60 % zone) for frames 5-39, then walking right at 5 px/frame across the service line at
-    x=128 (crossed between frames 56 and 57).
-    """
-
-    def update(self, frame: np.ndarray) -> list[PersonDetection]:
-        index = self.updates
-        self.updates += 1
-        if index < 5:
-            center = 140
-        elif index < 40:
-            center = 40
-        else:
-            center = 40 + 5 * (index - 39)
-        return [PersonDetection(bbox=(center - 20, 30, center + 20, 110), confidence=0.9, track_id=1)]
 
 
 WAIT_CAMERA = CameraConfig(
@@ -230,6 +187,66 @@ def test_waiting_scenario_writes_waits_alerts_events_and_report(tmp_path: Path) 
     assert queue["alerts"]["congestion_starts"] >= 1
     assert queue["event_counts"]["service_start"] == 1
     assert set(report["outputs"]) >= {"waits", "alerts", "event_log"}
+
+
+def test_on_frame_called_once_per_processed_frame_after_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writers: list[run_tracking.VideoWriter] = []
+
+    class SpyWriter(run_tracking.VideoWriter):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            writers.append(self)
+
+    monkeypatch.setattr(run_tracking, "VideoWriter", SpyWriter)
+    video = write_synthetic_video(tmp_path / "clip.mp4", frames=10)
+    updates: list[FrameUpdate] = []
+    written_at_call: list[int] = []
+
+    def on_frame(update: FrameUpdate) -> None:
+        updates.append(update)
+        written_at_call.append(writers[0].frames_written)
+
+    process_video(
+        video,
+        FakeTracker(),
+        RunOptions(output_dir=tmp_path / "out", frame_stride=2, h264=False),
+        on_frame=on_frame,
+    )
+
+    assert [u.frame_index for u in updates] == [0, 2, 4, 6, 8]
+    assert all(u.frames_total == 10 for u in updates)
+    assert written_at_call == [1, 2, 3, 4, 5]
+    assert all(u.people_in_frame == 1 and u.processing_fps > 0 and u.queue is None for u in updates)
+    assert updates[1].timestamp_s == pytest.approx(2 / SYNTHETIC_FPS)
+
+
+def test_should_stop_ends_run_and_still_writes_report(synthetic_video: Path, tmp_path: Path) -> None:
+    seen: list[FrameUpdate] = []
+    report = process_video(
+        synthetic_video,
+        FakeTracker(),
+        RunOptions(output_dir=tmp_path, h264=False),
+        on_frame=seen.append,
+        should_stop=lambda: len(seen) >= 3,
+    )
+
+    assert report["frames_processed"] == 3
+    assert report["stopped_early"] is True
+    assert (tmp_path / "metrics" / "synthetic_metrics.json").exists()
+
+
+def test_callbacks_do_not_change_outputs(tmp_path: Path) -> None:
+    video = write_synthetic_video(tmp_path / "walker.mp4", frames=60)
+    hooks = {"on_frame": lambda update: None, "should_stop": lambda: False}
+    for label, extra in (("plain", {}), ("hooked", hooks)):
+        options = RunOptions(output_dir=tmp_path / label, camera=WAIT_CAMERA, h264=False)
+        process_video(video, WalkerTracker(), options, **extra)
+    for key in ("timeseries", "waits", "event_log"):
+        plain = output_paths("walker", tmp_path / "plain")[key].read_bytes()
+        hooked = output_paths("walker", tmp_path / "hooked")[key].read_bytes()
+        assert plain == hooked
 
 
 def test_no_stitching_flag_and_option(tmp_path: Path) -> None:

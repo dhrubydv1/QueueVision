@@ -35,3 +35,9 @@ outputs/**
 # macOS
 .DS_Store
 ._*
+
+# Local agent workspace
+.superpowers/
+
+# Local API data (uploads, outputs, SQLite)
+data/

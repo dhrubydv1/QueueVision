@@ -7,7 +7,9 @@ on:
 jobs:
   lint-and-unit:
     # Unit tests deliberately run WITHOUT torch/ultralytics to keep queue,
-    # evaluation and video code independent of the model stack.
+    # evaluation and video code independent of the model stack. The API's
+    # dependencies (FastAPI etc.) are light and are installed; the API tests use
+    # a fake tracker.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,7 +19,8 @@ jobs:
       - name: Install light dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install opencv-python-headless==5.0.0.93 numpy==2.4.6 PyYAML==6.0.3 -r requirements-dev.txt
+          pip install opencv-python-headless==5.0.0.93 numpy==2.4.6 PyYAML==6.0.3 \
+            fastapi==0.162.0 "uvicorn[standard]==0.54.0" python-multipart==0.0.33 httpx==0.28.1 -r requirements-dev.txt
       - name: Ruff
         run: |
           ruff check .
