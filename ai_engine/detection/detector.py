@@ -125,6 +125,7 @@ class PersonDetector:
         self.image_size = image_size
         self.model = model if model is not None else load_yolo_model(self.model_path)
         self.last_inference_seconds = 0.0
+        self.last_speed_ms: dict[str, float] | None = None  # Ultralytics per-stage timings, read-only
 
     @property
     def inference_kwargs(self) -> dict[str, Any]:
@@ -148,6 +149,12 @@ class PersonDetector:
         results = getattr(self.model, method)(frame, **{**self.inference_kwargs, **overrides})
         synchronize(self._torch_device)
         self.last_inference_seconds = time.perf_counter() - start
+        speed = getattr(results[0], "speed", None)
+        self.last_speed_ms = (
+            {k: float(v) for k, v in speed.items() if isinstance(v, int | float)}
+            if isinstance(speed, dict)
+            else None
+        )
         return results[0]
 
     def detect(self, frame: np.ndarray) -> list[PersonDetection]:

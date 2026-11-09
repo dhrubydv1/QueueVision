@@ -240,7 +240,9 @@ def test_event_schema_to_dict_is_versioned_and_json_safe() -> None:
         SCHEMA_VERSION,
         CongestionEvent,
         QueueAbandonEvent,
+        QueueExitEvent,
         QueueJoinEvent,
+        ServiceCompleteEvent,
         ServiceStartEvent,
         ZoneEvent,
     )
@@ -255,6 +257,8 @@ def test_event_schema_to_dict_is_versioned_and_json_safe() -> None:
         CongestionEvent(
             "congestion_end", 40.0, 400, 40.0, 30.0, ("queue_length", "predicted_wait"), 3.0, 55.5
         ),
+        ServiceCompleteEvent("p0001", (1, 2), 15.0, 150, 16.0, 12.0, 3.0),
+        QueueExitEvent("p0001", (1, 2), 20.0, 200, 21.0, "served"),
     ]
     assert [e.to_dict()["event_type"] for e in events] == list(EVENT_TYPES)
     for event in events:

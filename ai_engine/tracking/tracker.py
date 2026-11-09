@@ -117,6 +117,11 @@ class PersonTracker:
         """Detection + tracking time of the most recent :meth:`update` call."""
         return self.detector.last_inference_seconds
 
+    @property
+    def last_speed_ms(self) -> dict[str, float] | None:
+        """Ultralytics preprocess/inference/postprocess milliseconds of the last frame, if reported."""
+        return self.detector.last_speed_ms
+
     def reset(self) -> None:
         """Start fresh tracker state (IDs restart at 1) on the next frame."""
         self._needs_reset = True

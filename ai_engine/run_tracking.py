@@ -18,7 +18,8 @@ Outputs (``<name>`` is the video stem or ``camera<N>``):
   ``outputs/events/<name>_alerts.csv`` (congestion alerts) and
   ``outputs/events/<name>_events.jsonl`` (every event, versioned schema); the
   metrics JSON gains waiting-time, service-rate and alert sections under ``queue``.
-  ``--no-stitching`` turns ID-switch stitching off.
+  ``--no-stitching`` turns ID-switch stitching off; ``--stitch-diagnostics`` also writes
+  ``outputs/events/<name>_stitch_diagnostics.jsonl`` (one stitch decision per line).
 """
 
 from __future__ import annotations
@@ -58,6 +59,7 @@ from ai_engine.metrics.queue_outputs import (
 from ai_engine.pipeline import iter_frame_results, source_fps
 from ai_engine.queue.analyzer import QueueAnalyzer, QueueFrameState
 from ai_engine.queue.camera_config import CameraConfig, CameraConfigError, load_camera_config
+from ai_engine.queue.stitching import write_decisions_jsonl
 from ai_engine.tracking.tracker import PersonTracker, TrackerSettings
 from ai_engine.utils.device import DeviceUnavailableError
 from ai_engine.video.transcode import original_copy_path, reencode_h264
@@ -95,6 +97,7 @@ class RunOptions:
     h264: bool = True
     keep_mp4v: bool = False
     stitching: bool | None = None  # None: follow the camera config; False forces it off
+    stitch_diagnostics: bool | None = None  # None: follow the camera config; True writes the decision log
 
     def __post_init__(self) -> None:
         if self.frame_stride < 1:
@@ -134,6 +137,7 @@ def output_paths(name: str, output_dir: Path) -> dict[str, Path]:
         "waits": output_dir / "events" / f"{name}_waits.csv",
         "alerts": output_dir / "events" / f"{name}_alerts.csv",
         "event_log": output_dir / "events" / f"{name}_events.jsonl",
+        "stitch_diagnostics": output_dir / "events" / f"{name}_stitch_diagnostics.jsonl",
     }
 
 
@@ -192,7 +196,13 @@ def process_video(
         # Warm-up keeps one-time model setup out of the FPS measurements.
         tracker.warmup((metadata.height, metadata.width, 3))
 
-        analyzer = QueueAnalyzer(camera, stitching_enabled=options.stitching) if camera else None
+        analyzer = (
+            QueueAnalyzer(
+                camera, stitching_enabled=options.stitching, stitch_diagnostics=options.stitch_diagnostics
+            )
+            if camera
+            else None
+        )
         zone_px = analyzer.zone.to_pixels(frame_size) if analyzer else None
         service_px = service_point_pixels(camera, frame_size) if camera else None
         writer = stack.enter_context(VideoWriter(paths["video"], effective_fps, frame_size))
@@ -323,6 +333,9 @@ def process_video(
             alerts=str(paths["alerts"]),
             event_log=str(paths["event_log"]),
         )
+        if analyzer is not None and analyzer.stitching_settings.diagnostics:
+            write_decisions_jsonl(paths["stitch_diagnostics"], analyzer.stitcher.decisions)
+            outputs["stitch_diagnostics"] = str(paths["stitch_diagnostics"])
 
     report_extra: dict[str, Any] = {
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -437,6 +450,11 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Disable ID-switch stitching inside the queue zone (overrides the camera config)",
     )
+    parser.add_argument(
+        "--stitch-diagnostics",
+        action="store_true",
+        help="Write events/<name>_stitch_diagnostics.jsonl (needs stitching.algorithm: guarded)",
+    )
     parser.add_argument("--save-mot", action="store_true", help="Write MOTChallenge track file")
     parser.add_argument("--blur-heads", action="store_true", help="Blur head regions in the saved video")
     parser.add_argument("--head-fraction", type=float, default=DEFAULT_HEAD_FRACTION)
@@ -472,6 +490,7 @@ def main(argv: list[str] | None = None) -> int:
             h264=not args.no_h264,
             keep_mp4v=args.keep_mp4v,
             stitching=False if args.no_stitching else None,
+            stitch_diagnostics=True if args.stitch_diagnostics else None,
         )
         model_load_started_at = time.perf_counter()
         detector = PersonDetector(

@@ -11,7 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.0"  # additive changes (new event types/fields) keep the version; see docs/event_schema.md
+QUEUE_EXIT_OUTCOMES = ("served", "abandoned", "unknown")
 
 EVENT_TYPES = (
     "zone_enter",
@@ -21,6 +22,8 @@ EVENT_TYPES = (
     "queue_abandon",
     "congestion_start",
     "congestion_end",
+    "service_complete",  # added after 1.0 (additive); appended so existing positions are unchanged
+    "queue_exit",
 )
 
 
@@ -105,6 +108,45 @@ class QueueAbandonEvent(_EventBase):
 
 
 @dataclass(frozen=True)
+class ServiceCompleteEvent(_EventBase):
+    """A served person was *observed* leaving the service zone.
+
+    ``timestamp_s`` is the first time they were seen outside the zone,
+    ``detected_s`` is when the exit was confirmed. Never emitted for a person
+    who merely disappeared, nor with a service line.
+    """
+
+    person_key: str
+    track_ids: tuple[int, ...]
+    timestamp_s: float
+    frame_index: int
+    detected_s: float
+    service_start_s: float
+    service_duration_s: float
+    event_type: str = field(default="service_complete", kw_only=True)
+    schema_version: str = field(default=SCHEMA_VERSION, kw_only=True)
+
+
+@dataclass(frozen=True)
+class QueueExitEvent(_EventBase):
+    """A person who joined the queue is no longer seen anywhere.
+
+    ``timestamp_s`` is the last time they were seen; ``outcome`` is
+    ``served`` (had a ``service_start``), ``abandoned`` (had a
+    ``queue_abandon``) or ``unknown``.
+    """
+
+    person_key: str
+    track_ids: tuple[int, ...]
+    timestamp_s: float
+    frame_index: int
+    detected_s: float
+    outcome: str
+    event_type: str = field(default="queue_exit", kw_only=True)
+    schema_version: str = field(default=SCHEMA_VERSION, kw_only=True)
+
+
+@dataclass(frozen=True)
 class CongestionEvent(_EventBase):
     """Congestion started or ended (``timestamp_s`` is the time it was detected)."""
 
@@ -119,4 +161,12 @@ class CongestionEvent(_EventBase):
     schema_version: str = SCHEMA_VERSION
 
 
-QueueEventType = ZoneEvent | QueueJoinEvent | ServiceStartEvent | QueueAbandonEvent | CongestionEvent
+QueueEventType = (
+    ZoneEvent
+    | QueueJoinEvent
+    | ServiceStartEvent
+    | QueueAbandonEvent
+    | ServiceCompleteEvent
+    | QueueExitEvent
+    | CongestionEvent
+)

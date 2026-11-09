@@ -9,6 +9,15 @@ Example::
 
 People are matched one-to-one by service time (``--tolerance`` seconds).
 Writes ``outputs/metrics/<name>_wait_eval.json``.
+
+The ground-truth CSV may instead use the observed-wait format (header
+``clip_id,track_id,queue_join_seconds,service_start_seconds,
+service_complete_seconds,observed_wait_seconds,annotation_confidence``, detected
+automatically). Its ``track_id`` is the annotator's number, so people are matched by
+queue-join time (``--tolerance``), and the system's measured waits and its predicted
+waits are scored separately. Give one or more ``--clip CLIP_ID=WAITS_CSV[:QUEUE_CSV]``
+(or ``--predicted-waits``/``--timeseries`` plus ``--clip-id``) and optionally
+``--min-confidence``. Real-video use needs ground truth with person ids; none exists yet.
 """
 
 from __future__ import annotations
@@ -23,20 +32,78 @@ if __package__ in (None, ""):
 
 from ai_engine import config
 from ai_engine.evaluation.wait_eval import (
+    CONFIDENCE_LEVELS,
+    ClipPredictions,
     completed,
+    evaluate_observed_waits,
     evaluate_predictions,
     evaluate_throughput,
     evaluate_waits,
+    is_observed_format,
     read_ground_truth_waits,
+    read_observed_ground_truth,
     read_predicted_waits,
     read_timeseries_predictions,
 )
 from ai_engine.metrics.performance import save_json
 
 
+def _clip_predictions(args: argparse.Namespace) -> dict[str, ClipPredictions]:
+    """Predictions per clip id from ``--clip`` entries or the single-clip arguments."""
+    clips: dict[str, ClipPredictions] = {}
+    for entry in args.clip or []:
+        clip_id, separator, files = entry.partition("=")
+        if not separator or not clip_id or not files:
+            raise ValueError(f"--clip must look like CLIP_ID=WAITS_CSV[:QUEUE_CSV], got {entry!r}")
+        waits_path, _, series_path = files.partition(":")
+        clips[clip_id] = ClipPredictions(
+            read_predicted_waits(waits_path),
+            read_timeseries_predictions(series_path) if series_path else None,
+        )
+    if args.predicted_waits is not None:
+        if not args.clip_id:
+            raise ValueError("--predicted-waits with the observed-wait format needs --clip-id")
+        clips[args.clip_id] = ClipPredictions(
+            read_predicted_waits(args.predicted_waits),
+            read_timeseries_predictions(args.timeseries) if args.timeseries else None,
+        )
+    if not clips:
+        raise ValueError("give --clip CLIP_ID=WAITS_CSV[:QUEUE_CSV] or --predicted-waits with --clip-id")
+    return clips
+
+
+def _main_observed(args: argparse.Namespace) -> int:
+    try:
+        truth = read_observed_ground_truth(args.ground_truth, args.min_confidence)
+        clips = _clip_predictions(args)
+    except (OSError, ValueError, KeyError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+    metrics = evaluate_observed_waits(truth, clips, args.tolerance, args.estimator)
+    name = args.ground_truth.stem
+    output = args.output or config.OUTPUTS_DIR / "metrics" / f"{name}_observed_wait_eval.json"
+    save_json(
+        {
+            "project": "QueueVision",
+            "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "ground_truth": str(args.ground_truth),
+            "ground_truth_format": "observed_wait",
+            "min_confidence": args.min_confidence,
+            "metrics": metrics,
+        },
+        output,
+    )
+    measured = metrics["measured"]
+    print(
+        f"{name}: {metrics['valid_observations']}/{metrics['ground_truth_rows']} valid observations, "
+        f"measured-wait MAE {measured['mae_s']} s over {measured['samples']} samples -> {output}"
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Compare predicted waiting times with ground truth.")
-    parser.add_argument("--predicted-waits", type=Path, required=True, help="<name>_waits.csv")
+    parser.add_argument("--predicted-waits", type=Path, help="<name>_waits.csv")
     parser.add_argument("--ground-truth", type=Path, required=True, help="Filled <name>_waits_gt.csv")
     parser.add_argument("--timeseries", type=Path, help="<name>_queue.csv, to score the wait predictions")
     parser.add_argument(
@@ -46,7 +113,33 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--tolerance", type=float, default=3.0, help="Max service-time difference in seconds")
     parser.add_argument("--output", type=Path, help="Report path (JSON)")
+    parser.add_argument(
+        "--min-confidence",
+        choices=CONFIDENCE_LEVELS,
+        help="Observed format: lowest annotation_confidence to use",
+    )
+    parser.add_argument(
+        "--clip",
+        action="append",
+        metavar="CLIP_ID=WAITS_CSV[:QUEUE_CSV]",
+        help="Observed format: predictions of one clip (repeatable)",
+    )
+    parser.add_argument("--clip-id", help="Observed format: clip id of --predicted-waits")
+    parser.add_argument(
+        "--estimator", help="Observed format: estimator version recorded with the predicted waits"
+    )
     args = parser.parse_args(argv)
+
+    try:
+        observed_format = is_observed_format(args.ground_truth)
+    except OSError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+    if observed_format:
+        return _main_observed(args)
+    if args.predicted_waits is None:
+        print("ERROR: --predicted-waits is required for the legacy ground-truth format", file=sys.stderr)
+        return 1
 
     try:
         if args.tolerance < 0:

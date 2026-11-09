@@ -72,12 +72,29 @@ class _CsvWriter:
         self.close()
 
 
+class SecondSampler:
+    """Pure once-per-video-second sampling rule used by the time series.
+
+    ``due(t)`` is True for the first frame of each second of video time; call
+    it once per frame, in order. Shared by the CSV writer and the replay harness.
+    """
+
+    def __init__(self) -> None:
+        self._next_second = 0
+
+    def due(self, timestamp_s: float) -> bool:
+        if timestamp_s + 1e-9 < self._next_second:
+            return False
+        self._next_second = math.floor(timestamp_s + 1e-9) + 1
+        return True
+
+
 class QueueTimeSeriesWriter(_CsvWriter):
     """One row per second of *video* time, sampled at the first frame of each second."""
 
     def __init__(self, path: str | Path) -> None:
         super().__init__(path, TIMESERIES_COLUMNS)
-        self._next_second = 0
+        self._sampler = SecondSampler()
 
     def add(
         self,
@@ -89,7 +106,7 @@ class QueueTimeSeriesWriter(_CsvWriter):
         service_rate: ServiceRate | None = None,
         prediction: WaitPrediction | None = None,
     ) -> None:
-        if timestamp_s + 1e-9 < self._next_second:
+        if not self._sampler.due(timestamp_s):
             return
         self._write(
             [
@@ -106,7 +123,6 @@ class QueueTimeSeriesWriter(_CsvWriter):
                 prediction.status if prediction else "unknown",
             ]
         )
-        self._next_second = math.floor(timestamp_s + 1e-9) + 1
 
 
 class ZoneEventWriter(_CsvWriter):
