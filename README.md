@@ -60,6 +60,8 @@ video. Results are stored in SQLite. A plain test page is the demo screen; see
 [section 9a](#9a-api-and-demo-page) and [docs/api.md](docs/api.md). The demo
 uses clips from the Collective Activity Dataset ([datasets/README.md](datasets/README.md)).
 
+Sprint 6 analysed where the count error comes from, tested 960-px detection and shorter grace/dwell (neither generalized to held-out clips, defaults unchanged), checked dataset licences and added a waiting-time annotation kit; see [docs/sprint6_report.md](docs/sprint6_report.md).
+
 Sprint 5 (accuracy and validation) adds opt-in alternatives and the tooling to
 measure them, without changing any default:
 

@@ -1,9 +1,21 @@
 # Testing Report
 
-Sprint 5 results come first, then Sprints 4, 3 and 2; the Sprint 1 report is
+Sprint 6 results come first, then Sprints 5, 4, 3 and 2; the Sprint 1 report is
 kept at the end. Every number here comes from a command that was actually run
 on the machine described under Sprint 2 (same environment). Nothing was
 estimated.
+
+## Sprint 6 (2026-11-09)
+
+Full write-up: [sprint6_report.md](sprint6_report.md).
+
+| Item | Result |
+|---|---|
+| `pytest -q` | 403 passed (370 at end of Sprint 5); `ruff check .` / `ruff format --check .` clean |
+| Error attribution (legacy, from 5 s, IoU 0.5) | reproduces raw bias +0.892 / +0.607 / +1.014 (all / val / test) exactly; per frame +2.10 counted-unmatched, +1.16 grace-period ghosts, −1.65 undetected, −0.77 still in dwell |
+| imgsz 960 vs 640, smoothed MAE from 5 s | val 0.910 vs 1.176; test 1.723 vs 1.619 → not adopted |
+| Grace 0.75 s + dwell 2.0 s (chosen on val) | val 0.984 vs 1.176; test 1.716 vs 1.619 → not adopted |
+| Waiting-time accuracy on real video | still not measured: annotation kits generated, sheets not yet filled |
 
 ## Sprint 5 (2026-11-08/09)
 
