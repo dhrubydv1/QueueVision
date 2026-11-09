@@ -31,9 +31,12 @@ acquisitions put the untouched original in `raw/` and any derived MP4 in
 
 - `metadata/dataset_manifest.csv`: one row per clip (acquired or planned). The
   planned rows are an acquisition plan only; nothing in them has been downloaded.
-- `metadata/dataset_licensing_register.csv`: licence terms per dataset. Only
-  MOT17's licence (recorded in Sprint 1) is known; the rest are `unknown` and
-  must be checked before any redistribution. Nothing was re-verified this sprint.
+- `metadata/dataset_licensing_register.csv`: licence terms per dataset, checked
+  against official pages on 2026-11-09 (details and quotes in
+  `docs/dataset_licences.md`). MOT17 is explicit (CC BY-NC-SA 3.0). CAD, MIT
+  Traffic and CUHK Square state **no terms** (`none stated`, redistribution
+  `unknown`): do not redistribute them or derived videos without written
+  permission from the authors.
 - `splits/*.txt`: no model is trained here; the splits separate parameter tuning
   (`val`) from held-out reporting (`test`). Rule: CAD clips sorted by id, first
   three to `val`, the other four to `test`; MOT17 clips to `test`; `train` is empty.
@@ -61,7 +64,7 @@ Both are MOTChallenge's per-sequence preview videos (WebM, about 5 MB each),
 re-encoded to MP4 with H.264 locally. The full-resolution frame sequences
 were **not** downloaded.
 
-**Licence:** MOTChallenge sequences are released under
+**Licence (re-checked 2026-11-09 on https://motchallenge.net/data/MOT17/; some sequences come from third-party sources whose own conditions may also apply):** MOTChallenge sequences are released under
 [Creative Commons Attribution-NonCommercial-ShareAlike 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/).
 They may be used for this academic, non-commercial project with attribution.
 Cite: Milan et al., *MOT16: A Benchmark for Multi-Object Tracking*, arXiv:1603.00831.
@@ -81,9 +84,11 @@ first queue-length check. Nothing from it is committed.
 | Frame rate | **Not stated by the dataset.** `prepare_cad.py` assumes 30 fps (`--fps`); every time value depends on this assumption |
 | Git | Never commit its frames or videos (this repository is public); `datasets/raw/` and `datasets/annotations/` are git-ignored |
 
-**Licence / terms.** This README does not state a licence for the dataset.
-Check the dataset's terms of use on the project page before redistributing
-the data or anything derived from it (including the converted videos).
+**Licence / terms.** The project page (checked 2026-11-09) states **no licence
+or terms of use**; it only asks users to cite the paper below. Absence of terms
+is not permission: keep use local and academic, never redistribute the data or
+derived videos, and request permission from the authors for anything further.
+See `docs/dataset_licences.md`.
 
 **Citation.** W. Choi, K. Shahid, S. Savarese, "What are they doing?:
 Collective activity classification using spatio-temporal relationship among
