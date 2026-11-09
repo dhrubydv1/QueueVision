@@ -1,0 +1,5 @@
+license_id,dataset,license_name,license_url,terms_verified,redistribution_permitted,commercial_use_permitted,attribution_required,source_url,last_checked,notes
+mot17,mot17,CC BY-NC-SA 3.0,https://creativecommons.org/licenses/by-nc-sa/3.0/,no,unknown,no,yes,https://motchallenge.net/,,licence recorded in datasets/README.md in Sprint 1; not re-checked this sprint
+cad,cad,unknown,,no,unknown,unknown,unknown,https://cvgl.stanford.edu/projects/collective/collectiveActivity.html,,terms not yet checked; do not redistribute
+mit_traffic,mit_traffic,unknown,,no,unknown,unknown,unknown,,,terms not yet checked; do not redistribute
+cuhk_square,cuhk_square,unknown,,no,unknown,unknown,unknown,,,terms not yet checked; do not redistribute
