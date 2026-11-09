@@ -7,7 +7,7 @@ Team: Dhrub Narayan Yadav and Prabin Kumar Sharma
 
 QueueVision watches a fixed camera view of a queue and estimates how long
 the queue is and how long people wait. This repository now contains
-**Sprint 4**: the Sprint 3 AI engine plus a local upload API. The engine
+**Sprint 5**: the Sprint 4 local upload API and Sprint 3 AI engine, plus opt-in accuracy options and validation tooling. The engine
 detects and tracks people, decides who is
 standing in a configured queue zone, reports the queue length over time,
 measures waiting times at a service point, estimates the service rate,
@@ -59,6 +59,31 @@ watch progress and live queue numbers over a WebSocket, then play the annotated
 video. Results are stored in SQLite. A plain test page is the demo screen; see
 [section 9a](#9a-api-and-demo-page) and [docs/api.md](docs/api.md). The demo
 uses clips from the Collective Activity Dataset ([datasets/README.md](datasets/README.md)).
+
+Sprint 5 (accuracy and validation) adds opt-in alternatives and the tooling to
+measure them, without changing any default:
+
+1. A **temporal queue-membership classifier** (`membership.algorithm: temporal`)
+   with explicit per-person states, and a **guarded track stitcher**
+   (`stitching.algorithm: guarded`) that defers linking and rejects ambiguous
+   matches.
+2. Two new lifecycle events, `service_complete` (service zones only) and
+   `queue_exit`, and `service_rate.basis` to choose what the service rate counts.
+3. A **replay harness** (`ai_engine/replay_queue.py`): YOLO and ByteTrack run once,
+   then every queue-logic variant is scored on the same saved tracks.
+4. MOT17 **stitching evaluation**, a **dataset manifest, licence register and
+   validator**, a **benchmark** script, a waiting-time evaluator that reads
+   per-person ground truth, and **upload validation** for the API.
+
+**Headline result: none of the new queue-counting options beat the Sprint 4
+algorithm on the held-out clips, so the defaults are unchanged.** The new code is
+available behind configuration switches, with the measurements that show why it
+is not the default. Waiting-time accuracy on real video could not be measured
+because no footage with per-person ground truth exists. Details:
+[docs/sprint5_implementation_report.md](docs/sprint5_implementation_report.md),
+[docs/sprint5_initial_audit.md](docs/sprint5_initial_audit.md),
+[docs/security_review.md](docs/security_review.md) and the Sprint 5 section of
+[docs/testing_report.md](docs/testing_report.md).
 
 > "People in frame" is the number of people visible. "Queue length" is the
 > number of confirmed members of the queue. Queue logic runs only when a
@@ -227,6 +252,7 @@ device, a bad camera config or invalid settings.
 | `--camera-config` | none | Camera YAML with the queue zone; enables queue logic |
 | `--no-stitching` | off | Disable ID-switch stitching inside the queue zone (overrides the camera config) |
 | `--save-mot` | off | Write a MOTChallenge track file |
+| `--stitch-diagnostics` | off | Write `events/<name>_stitch_diagnostics.jsonl`, one stitch decision per line (needs `stitching.algorithm: guarded`) |
 | `--blur-heads` | off | Blur head regions in the saved video |
 | `--head-fraction` | 0.2 | Top fraction of each person box that is blurred |
 | `--panel-position` | `top-left` | `top-left`, `top-right`, `bottom-left`, `bottom-right` |
@@ -263,6 +289,80 @@ binds to 127.0.0.1 by default and has no authentication, so keep it local.
 Everything the server stores is local: uploads, outputs and the SQLite
 database are under `data/` (git-ignored; override with `QUEUEVISION_DATA_DIR`).
 Endpoints, WebSocket messages and settings are in [docs/api.md](docs/api.md).
+
+## 9b. Sprint 5: replay, stitching evaluation, dataset checks, benchmark
+
+```bash
+# 1. Run YOLO + ByteTrack once per clip and keep the tracks (and guarded-stitching decisions)
+python ai_engine/run_tracking.py --video datasets/raw/cad_seq27.mp4 \
+  --camera-config configs/cameras/cad_seq27.yaml --save-mot --stitch-diagnostics
+
+# 2. Replay the saved tracks through queue-logic variants (no detector needed)
+python ai_engine/replay_queue.py --clips cad_seq10 cad_seq25 \
+  --tracks-dir outputs/s5_tracks/cad/tracks \
+  --variants outputs/s5_replay/variants_a.yaml --splits-dir datasets/splits \
+  --output outputs/s5_replay/queue_variants_a.json
+
+# 3. Identity metrics and link correctness of the stitchers on MOT17, stitch counts on CAD
+python ai_engine/evaluate_stitching.py --sequences mot17_04 mot17_09 \
+  --tracks-dir outputs/s5_tracks/mot17/tracks --output outputs/s5_replay/stitching_mot17.json
+
+# 4. Check the dataset manifest, licence register, splits and videos
+python scripts/validate_dataset.py
+
+# 5. Per-stage timing, FPS, CPU and memory
+python scripts/benchmark.py --video datasets/raw/cad_seq27.mp4 \
+  --camera-config configs/cameras/cad_seq27.yaml --device mps
+```
+
+`replay_queue.py` always adds a variant called `as_configured` (the camera YAML
+unchanged). `--variants` is a YAML list of `{name, membership, stitching, smoothing}`
+overrides. `benchmark.py --tracks <mot file>` benchmarks only the queue logic.
+`evaluate_waiting.py` also reads the observed-wait ground-truth format
+(see [docs/implementation.md](docs/implementation.md)).
+
+### New opt-in camera settings (all defaults keep Sprint 4 behaviour)
+
+```yaml
+membership:
+  algorithm: temporal            # legacy (default) | temporal
+  min_dwell_seconds: 3.0
+  max_speed_heights_per_second: 0.5
+  exit_grace_seconds: 1.5
+  min_observed_fraction: 0.0     # 0..1, 0 disables
+  min_track_observations: 1      # integer >= 1
+  boundary_margin_heights: 0.0   # >= 0, box heights; entry/exit hysteresis
+  min_mean_detection_confidence: 0.0   # 0..1, 0 disables
+  scale_motion_weight: 0.0       # >= 0, 0 disables
+  count_service_as_queue: true
+  terminal_retention_seconds: 5.0
+
+stitching:
+  enabled: true
+  algorithm: guarded             # legacy (default) | guarded
+  min_lost_seconds: 1.0          # = ByteTrack track_buffer seconds
+  max_size_ratio: 1.5
+  ambiguity_margin: 0.2
+  min_direction_similarity: -0.2
+  direction_min_speed_heights: 0.2
+  max_duplicate_iou: 0.5
+  max_links_per_person: 4
+  diagnostics: false
+
+service:                         # used for service_complete (needs service_zone)
+  min_service_seconds: 2.0
+  exit_confirm_seconds: 1.0
+
+service_rate:
+  basis: service_start           # service_start (default) | service_complete (needs service_zone)
+```
+
+Measured results for these options are in
+[docs/sprint5_implementation_report.md](docs/sprint5_implementation_report.md):
+guarded stitching raises link precision on MOT17, but no temporal or guarded
+variant has a lower queue-length MAE than the legacy default on the held-out
+clips. The API must stay on localhost
+([docs/security_review.md](docs/security_review.md)).
 
 ## 10. Camera config and the queue zone
 

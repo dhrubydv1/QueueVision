@@ -1,4 +1,4 @@
-# QueueVision Architecture (Sprint 4)
+# QueueVision Architecture (Sprint 5)
 
 ## Data flow
 
@@ -247,6 +247,69 @@ keeping the partial results.
 **SQLite tables** (`data/queuevision.db`): `schema_meta`, `videos`, `events`,
 `waits`, `alerts` and `timeseries`; the last four reference `videos` with
 `ON DELETE CASCADE`. Columns are listed in [api.md](api.md).
+
+## Sprint 5 additions
+
+Sprint 5 adds opt-in components. With the default configuration the data flow
+above is unchanged (verified by the replay gate, see
+[testing_report.md](testing_report.md)). Measurements and the decision to keep
+the defaults are in [sprint5_implementation_report.md](sprint5_implementation_report.md).
+
+```
+ people ─► stitcher ─► person keys ─┬─► membership (legacy: per track ID)
+ (track_id, box)  legacy | guarded  │   membership (temporal: per person key)
+                                    └─► lifecycle ─► queue_join / service_start /
+                                         service_complete / queue_abandon / queue_exit
+```
+
+| Piece | Where it fits |
+|---|---|
+| Temporal membership (`queue/temporal_membership.py`) | Replaces `QueueMembershipTracker` inside `QueueAnalyzer` when `membership.algorithm: temporal`; same `zone_enter` / `zone_exit` output plus per-state counts in `QueueFrameState` |
+| Guarded stitcher (`GuardedTrackStitcher` in `queue/stitching.py`) | Replaces `TrackStitcher` when `stitching.algorithm: guarded`; optional per-decision diagnostics |
+| New lifecycle events (`queue/events.py`, `event_schema.py`) | `service_complete` (service zone only) and `queue_exit` are emitted by `QueueLifecycle` beside the existing events |
+| Replay harness (`evaluation/replay.py`, `replay_queue.py`) | Offline: reads saved MOT tracks and drives `QueueAnalyzer` directly, so detector and tracker are not involved |
+| Stitching evaluation (`evaluate_stitching.py`, `evaluation/stitch_eval.py`) | Offline: scores saved tracks with and without stitching against MOT17 ground truth |
+| Data validation (`ai_engine/data/validation.py`, `scripts/validate_dataset.py`) | Offline: checks `datasets/metadata/` and the videos; imports nothing from the engine |
+| Upload validation (`api/upload_validation.py`) | API layer: magic bytes and an OpenCV decode probe before a run is accepted |
+| Benchmark (`scripts/benchmark.py`) | Offline: times decode, detection, tracking and queue logic per frame |
+
+**Where membership identity comes from.** The stitcher always produces a map
+from track ID to person key. The temporal classifier keeps one state per
+*stitched person key*, so a person whose ByteTrack ID changed keeps their state.
+The legacy tracker keeps one state per *raw track ID*; stitched keys are used
+only afterwards by the lifecycle. Consequently the temporal option is only as
+good as the stitcher; with stitching disabled every track ID is its own key.
+
+### Temporal classifier state machine
+
+Per person key, with every threshold taken from `MembershipSettings`:
+
+```
+OUTSIDE   -> CANDIDATE            visible and passes the entry test (boundary margin)
+CANDIDATE -> WAITING              dwell, speed and observation rules pass (zone_enter)
+CANDIDATE -> forgotten            fails the stay test or unseen > exit_grace_seconds
+CANDIDATE -> SERVICE              foot in the service zone, rules not met (no join)
+WAITING   -> TEMPORARILY_OCCLUDED not detected this frame
+OCCLUDED  -> WAITING              detected again and passes the stay test
+WAITING / OCCLUDED -> SERVICE     foot in the service zone
+WAITING / OCCLUDED -> ABANDONED   outside the zone (past the margin) or unseen > grace (zone_exit)
+SERVICE   -> EXITED               outside both zones or unseen > grace (zone_exit)
+```
+
+ABANDONED and EXITED are terminal and forgotten after
+`terminal_retention_seconds`. A person in SERVICE counts toward the queue only
+if they reached WAITING first and `count_service_as_queue` is true. Service
+lines give no SERVICE state; only a service zone does. The membership-confidence
+value is a heuristic, not a probability.
+
+### Guarded stitching and replay
+
+The guarded stitcher does not link a lost person until they have been unseen
+for `min_lost_seconds`, because ByteTrack can still revive the lost ID until its
+`track_buffer` runs out. It then scores candidates (velocity-predicted position,
+size ratio, direction, duplicate overlap) and links nothing when the runner-up
+is within `ambiguity_margin`. The replay harness exists so that these options
+can be compared on identical tracks: differences come only from queue logic.
 
 ## Dependency rules
 
