@@ -70,6 +70,17 @@ class QueueMembershipTracker:
         """Confirmed members, including ones briefly occluded within the grace period."""
         return sum(1 for s in self._states.values() if s.status is MemberStatus.IN_QUEUE)
 
+    def candidate_blocker(self, track_id: int, now: float) -> str | None:
+        """Read-only: why a candidate is not yet a member at ``now`` (dwell, speed or None)."""
+        state = self._states.get(track_id)
+        if state is None or state.status is not MemberStatus.CANDIDATE or state.zone_entered_s is None:
+            return None
+        if now - state.zone_entered_s < self.settings.min_dwell_seconds:
+            return "dwell"
+        if self._average_speed(state, now) > self.settings.max_speed_heights_per_second:
+            return "speed"
+        return None
+
     @property
     def tracked_state_count(self) -> int:
         return len(self._states)

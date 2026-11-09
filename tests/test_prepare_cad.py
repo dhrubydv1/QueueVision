@@ -95,3 +95,42 @@ def test_help_runs_directly() -> None:
         check=False,
     )
     assert result.returncode == 0 and "--source" in result.stdout
+
+
+def test_read_person_boxes_and_rows() -> None:
+    text = "001\t10\t20\t30\t40\t4\t1\n001\t1\t2\t3\t4\t3\t7\n\n011\t5\t6\t7\t8\t9\t2\n"
+    boxes = prepare_cad.read_person_boxes(text)
+    assert boxes[1] == [(10, 20, 30, 40, 4, 1), (1, 2, 3, 4, 3, 7)]
+    rows = prepare_cad.person_box_rows(boxes, fps=10)
+    assert rows[0] == ("0.000", 0, 10, 20, 30, 40, 4, "queueing", 1)
+    assert rows[1][7] == "waiting"
+    assert rows[2] == ("1.000", 10, 5, 6, 7, 8, 9, "action_9", 2)
+    with pytest.raises(ValueError):
+        prepare_cad.read_person_boxes("001 1 2 3 4 4\n")
+
+
+def test_person_box_frames_match_queue_counts() -> None:
+    boxes = prepare_cad.read_person_boxes(ANNOTATIONS)
+    counts = prepare_cad.queue_counts(prepare_cad.read_annotations(ANNOTATIONS), fps=10)
+    rows = prepare_cad.person_box_rows(boxes, fps=10)
+    assert {(r[0], r[1]) for r in rows} == {(f"{t:.3f}", i) for t, i, _ in counts}
+    for _t, i, c in counts:
+        assert sum(1 for r in rows if r[1] == i and r[6] == 4) == c
+
+
+def test_person_boxes_only_writes_just_the_csv(cad_zip: Path, tmp_path: Path) -> None:
+    out = tmp_path / "ann"
+    path = prepare_cad.prepare_person_boxes(cad_zip, 5, 10.0, out)
+    assert [p.name for p in out.iterdir()] == ["cad_seq05_person_boxes.csv"]
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == ",".join(prepare_cad.PERSON_BOX_COLUMNS)
+    assert len(lines) == 1 + 4
+    with pytest.raises(FileExistsError):
+        prepare_cad.prepare_person_boxes(cad_zip, 5, 10.0, out)
+    prepare_cad.prepare_person_boxes(cad_zip, 5, 10.0, out, force=True)
+    assert not (tmp_path / "video").exists()
+
+
+def test_prepare_sequence_also_writes_person_boxes(cad_zip: Path, tmp_path: Path) -> None:
+    prepare_cad.prepare_sequence(cad_zip, 5, 10.0, tmp_path / "video", tmp_path / "ann")
+    assert (tmp_path / "ann" / "cad_seq05_person_boxes.csv").is_file()

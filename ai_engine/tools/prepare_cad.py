@@ -5,7 +5,10 @@ Example::
     python ai_engine/tools/prepare_cad.py --source datasets/raw/cad.zip --sequences 10 25
 
 For each sequence writes ``<video-dir>/cad_seqNN.mp4``, ``<annotation-dir>/cad_seqNN_queue_counts.csv``
-(columns ``time_s, frame, queue_count``, as read by ``evaluate_queue.py``) and ``cad_seqNN.json``.
+(columns ``time_s, frame, queue_count``, as read by ``evaluate_queue.py``) and ``cad_seqNN.json``, plus
+``cad_seqNN_person_boxes.csv`` (columns ``time_s, frame, x, y, w, h, action, action_name, pose``:
+one row per annotated person, boxes in the 720x480 video pixel space, same frame and time
+convention as the queue-count CSV; ``--person-boxes-only`` writes just that file).
 The dataset does not state its frame rate, so ``--fps`` (default 30) is an assumption, recorded as
 ``fps_assumed`` in the JSON. Queueing is annotation action 4. The zip is untrusted: only
 ``seqNN/frameN.jpg`` and ``seqNN/annotations.txt`` members are read, in memory, never extracted.
@@ -39,6 +42,8 @@ DEFAULT_FPS = 30.0  # assumption: the dataset does not state its frame rate
 VIDEO_DIR = config.PROJECT_ROOT / "datasets" / "raw"
 ANNOTATION_DIR = config.PROJECT_ROOT / "datasets" / "annotations" / "cad"
 CSV_COLUMNS = ("time_s", "frame", "queue_count")
+PERSON_BOX_COLUMNS = ("time_s", "frame", "x", "y", "w", "h", "action", "action_name", "pose")
+ACTION_NAMES = {1: "NA", 2: "crossing", 3: "waiting", 4: "queueing", 5: "walking", 6: "talking"}
 
 
 def read_annotations(text: str) -> dict[int, list[int]]:
@@ -52,6 +57,46 @@ def read_annotations(text: str) -> dict[int, list[int]]:
             raise ValueError(f"Malformed annotation row: {line!r}")
         actions.setdefault(int(parts[0]), []).append(int(parts[5]))
     return actions
+
+
+def read_person_boxes(text: str) -> dict[int, list[tuple[int, int, int, int, int, int]]]:
+    """Parse rows into frame number -> ``(x, y, w, h, action, pose)`` per person, in file order."""
+    boxes: dict[int, list[tuple[int, int, int, int, int, int]]] = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        if len(parts) < 7:
+            raise ValueError(f"Malformed annotation row: {line!r}")
+        x, y, w, h, action, pose = (int(v) for v in parts[1:7])
+        boxes.setdefault(int(parts[0]), []).append((x, y, w, h, action, pose))
+    return boxes
+
+
+def person_box_rows(
+    boxes: dict[int, list[tuple[int, int, int, int, int, int]]], fps: float
+) -> list[tuple[str, int, int, int, int, int, int, str, int]]:
+    """CSV rows; ``frame`` and ``time_s`` follow ``queue_counts`` (index = frame number - 1)."""
+    if fps <= 0:
+        raise ValueError("fps must be positive")
+    rows = []
+    for frame in sorted(boxes):
+        index = frame - 1
+        for x, y, w, h, action, pose in boxes[frame]:
+            name = ACTION_NAMES.get(action, f"action_{action}")
+            rows.append((f"{index / fps:.3f}", index, x, y, w, h, action, name, pose))
+    return rows
+
+
+def write_person_boxes(path: Path, text: str, fps: float) -> Path:
+    """Write the person-box CSV for one sequence's annotation text."""
+    rows = person_box_rows(read_person_boxes(text), fps)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        out = csv.writer(handle)
+        out.writerow(PERSON_BOX_COLUMNS)
+        out.writerows(rows)
+    return path
 
 
 def queue_counts(annotations: dict[int, list[int]], fps: float) -> list[tuple[float, int, int]]:
@@ -98,6 +143,18 @@ def _frames(readers: list[tuple[int, object]]) -> Iterator[np.ndarray]:
         yield frame
 
 
+def prepare_person_boxes(
+    source: Path, sequence: int, fps: float, annotation_dir: Path, force: bool = False
+) -> Path:
+    """Write only ``cad_seqNN_person_boxes.csv``; no video, count CSV or JSON is touched."""
+    path = annotation_dir / f"cad_seq{sequence:02d}_person_boxes.csv"
+    if path.exists() and not force:
+        raise FileExistsError(f"{path} exists; use --force")
+    with ExitStack() as stack:
+        text, _ = _read_source(source, sequence, stack)
+    return write_person_boxes(path, text, fps)
+
+
 def prepare_sequence(
     source: Path,
     sequence: int,
@@ -120,6 +177,7 @@ def prepare_sequence(
     with ExitStack() as stack:
         text, readers = _read_source(source, sequence, stack)
         rows = queue_counts(read_annotations(text), fps)
+        write_person_boxes(annotation_dir / f"cad_seq{sequence:02d}_person_boxes.csv", text, fps)
         try:
             for frame in _frames(readers):
                 if writer is None:
@@ -155,8 +213,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--video-dir", type=Path, default=VIDEO_DIR)
     parser.add_argument("--annotation-dir", type=Path, default=ANNOTATION_DIR)
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
+    parser.add_argument(
+        "--person-boxes-only",
+        action="store_true",
+        help="Write only cad_seqNN_person_boxes.csv (no video/count/JSON; --force overwrites just that CSV)",
+    )
     args = parser.parse_args(argv)
     for sequence in args.sequences:
+        if args.person_boxes_only:
+            try:
+                boxes = prepare_person_boxes(args.source, sequence, args.fps, args.annotation_dir, args.force)
+            except (FileExistsError, ValueError, OSError, zipfile.BadZipFile) as error:
+                print(f"ERROR: sequence {sequence}: {error}", file=sys.stderr)
+                return 1
+            print(f"Sequence {sequence}: wrote {boxes}")
+            continue
         try:
             video, annotations = prepare_sequence(
                 args.source, sequence, args.fps, args.video_dir, args.annotation_dir, args.force
