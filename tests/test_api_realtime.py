@@ -134,24 +134,24 @@ def test_realtime_never_accumulates_lag(settings) -> None:  # noqa: F811
     assert clock.waits == []  # behind schedule from the first delay on: wait is never called
 
 
-def test_realtime_wait_interrupted_by_cancel(settings) -> None:  # noqa: F811
+def test_realtime_wait_interrupted_by_cancel(settings, tmp_path) -> None:  # noqa: F811
     import cv2
     import numpy as np
 
-    from tests.test_api_jobs import add_video  # noqa: F401
-
-    camera_clip = settings.data_dir.parent / "long.mp4"
-    writer = cv2.VideoWriter(str(camera_clip), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (64, 48))
-    frame = np.full((48, 64, 3), 40, dtype=np.uint8)
-    for _ in range(900):
-        writer.write(frame)
+    slow_clip = tmp_path / "slow.mp4"  # 0.2 fps: each pacing wait is 5 s
+    writer = cv2.VideoWriter(str(slow_clip), cv2.VideoWriter_fourcc(*"mp4v"), 0.2, (64, 48))
+    for _ in range(6):
+        writer.write(np.full((48, 64, 3), 40, dtype=np.uint8))
     writer.release()
     with make_client(settings) as client:
-        video_id = upload(client, camera_clip, realtime="true").json()["video_id"]
-        wait_status(client, video_id, wanted=("processing",))
-        time.sleep(0.3)  # let it reach a pacing wait
+        video_id = upload(client, slow_clip, realtime="true").json()["video_id"]
+        deadline = time.time() + WAIT
+        while client.get(f"/api/videos/{video_id}").json()["frames_processed"] < 1:
+            assert time.time() < deadline, "run never handled a frame"
+            time.sleep(0.02)
+        assert client.get(f"/api/videos/{video_id}").json()["status"] == "processing"
         started = time.monotonic()
         assert client.post(f"/api/videos/{video_id}/cancel").status_code in (200, 202)
-        run = wait_status(client, video_id, wanted=("cancelled", "completed", "failed"))
+        run = wait_status(client, video_id)
         assert run["status"] == "cancelled"
-        assert time.monotonic() - started < 2.0
+        assert time.monotonic() - started < 1.0
