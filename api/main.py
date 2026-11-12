@@ -321,6 +321,15 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
             raise HTTPException(404, "annotated video not available")
         return FileResponse(path, media_type="video/mp4")  # Starlette answers Range requests with 206
 
+    @app.get("/api/videos/{video_id}/timeseries.csv")
+    def timeseries_csv(video_id: VideoId) -> FileResponse:
+        record = get_record(video_id)
+        name = ((record["report"] or {}).get("outputs") or {}).get("timeseries")
+        path = Path(name) if name else None
+        if path is None or not path.is_file():
+            raise HTTPException(404, "time series not available")
+        return FileResponse(path, media_type="text/csv", filename=f"run{video_id}_timeseries.csv")
+
     def first_preview(video_id: int) -> tuple[int, bytes]:
         record = get_record(video_id)
         if record["status"] != "processing":

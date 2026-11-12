@@ -1131,6 +1131,45 @@
         "summary": "Timeseries"
       }
     },
+    "/api/videos/{video_id}/timeseries.csv": {
+      "get": {
+        "operationId": "timeseries_csv_api_videos__video_id__timeseries_csv_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Video Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Timeseries Csv"
+      }
+    },
     "/api/videos/{video_id}/video": {
       "get": {
         "operationId": "video_api_videos__video_id__video_get",
