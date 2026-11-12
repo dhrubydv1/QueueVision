@@ -27,7 +27,9 @@ export function ProcessingRunCard({ run, windowS }: Readonly<{ run: Run; windowS
   }
 
   const congested = progress?.alert_active === true;
-  const chip = connectionState === "open" ? (congested ? "congested" : "live") : "offline";
+  // Same offline rule as LiveRunView: closed, or reconnecting after data; neutral while first connecting.
+  const offline = connectionState === "closed" || (connectionState === "connecting" && lastMessageAt !== null);
+  const chip = offline ? "offline" : connectionState === "open" ? (congested ? "congested" : "live") : "processing";
 
   return (
     <article className="rounded-card border border-border bg-surface p-5" aria-label={`Run ${run.original_name}`}>

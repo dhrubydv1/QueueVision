@@ -52,6 +52,23 @@ describe("RunDetail", () => {
     expect(screen.getByText("every 2nd frame · heads blurred · fast")).toBeInTheDocument();
   });
 
+  it("shows the annotated video when heads were blurred", async () => {
+    vi.mocked(api.getRun).mockResolvedValue(run() as never);
+    const { container } = view();
+    await screen.findByRole("region", { name: "Joined" });
+    expect(container.querySelector("video")).not.toBeNull();
+  });
+
+  it("does not show the video for a blur-off run", async () => {
+    vi.mocked(api.getRun).mockResolvedValue(run({ options: { blur_heads: false, frame_stride: 2, realtime: false } }) as never);
+    const { container } = view();
+    await screen.findByRole("region", { name: "Joined" });
+    expect(container.querySelector("video")).toBeNull();
+    expect(
+      screen.getByText("This run was processed with head blurring off, so its annotated video is not shown in the dashboard."),
+    ).toBeInTheDocument();
+  });
+
   it("shows Not reported for absent figures", async () => {
     vi.mocked(api.getRun).mockResolvedValue(run({ summary: { event_counts: { queue_join: 5 }, waiting: { mean_wait_s: null } } }) as never);
     view();

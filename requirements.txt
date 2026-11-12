@@ -8,6 +8,7 @@ numpy==2.4.6
 lap==0.5.13            # linear assignment used by ByteTrack
 PyYAML==6.0.3          # camera configs and resolved tracker YAML
 # pandas was removed in Sprint 2: CSV outputs use the standard csv module.
+pydantic==2.14.2
 fastapi==0.162.0
 uvicorn[standard]==0.54.0
 python-multipart==0.0.33

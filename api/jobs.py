@@ -393,7 +393,10 @@ class JobManager:
         def on_frame(update: FrameUpdate) -> None:
             state["frames"] = update.frame_index + 1
             if update.image is not None:
-                self.preview.offer(video_id, update.image, update.people, self._clock())
+                try:
+                    self.preview.offer(video_id, update.image, update.people, self._clock())
+                except Exception:  # the preview is optional: never fail the run over it
+                    LOGGER.exception("preview encode failed for run %s", video_id)
             queue = update.queue
             if queue is not None:
                 for event in queue.events:

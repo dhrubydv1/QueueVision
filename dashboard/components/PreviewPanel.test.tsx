@@ -21,6 +21,11 @@ describe("PreviewPanel", () => {
     fireEvent.error(first!);
     rerender(<PreviewPanel videoId={1} active={false} />);
     act(() => { vi.advanceTimersByTime(5000); });
-    expect(container.querySelector("img")).toBe(first);
+    expect(container.querySelector("img")).toBeNull();
+  });
+  it("renders no img and no request when the run is not active", () => {
+    const { container } = render(<PreviewPanel videoId={1} active={false} />);
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByText("Run finished — open the recorded run")).toBeInTheDocument();
   });
 });

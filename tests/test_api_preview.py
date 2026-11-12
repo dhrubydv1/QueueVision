@@ -201,3 +201,26 @@ def test_preview_blurred_even_when_blur_off(settings, clip, monkeypatch) -> None
     outside = np.ones(raw.shape[:2], dtype=bool)
     outside[head] = False
     assert diff[outside].mean() < 0.5  # rest of the frame matches an unblurred encode
+
+
+def test_main_port_and_host_reach_the_app_settings(monkeypatch) -> None:
+    import uvicorn
+
+    from api.__main__ import main
+    from api.settings import ApiSettings
+
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
+    monkeypatch.setenv("QUEUEVISION_HOST", "127.0.0.1")
+    monkeypatch.setenv("QUEUEVISION_PORT", "8000")
+    main(["--port", "8001"])
+    assert "http://127.0.0.1:8001" in ApiSettings.from_env().effective_allowed_origins()
+
+
+def test_preview_encode_error_does_not_fail_the_run(settings, clip, monkeypatch) -> None:  # noqa: F811
+    def boom(self, *args, **kwargs):
+        raise RuntimeError("encode failed")
+
+    monkeypatch.setattr(PreviewStore, "offer", boom)
+    with make_client(settings) as client:
+        video_id = upload(client, clip).json()["video_id"]
+        assert wait_status(client, video_id)["status"] == "completed"

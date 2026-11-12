@@ -186,7 +186,11 @@ export function RunDetail({ videoId }: Readonly<{ videoId: number }>) {
       {deleteError ? <p role="alert" className="text-sm text-danger">{deleteError}</p> : null}
       {run.error ? <p role="alert" className="text-sm text-danger">{run.error}</p> : null}
 
-      {done ? (
+      {done && run.options.blur_heads === false ? (
+        <p className="rounded-card border border-border bg-surface p-5 text-sm text-text-2">
+          This run was processed with head blurring off, so its annotated video is not shown in the dashboard.
+        </p>
+      ) : done ? (
         <video controls preload="metadata" src={videoUrl(videoId)} className="w-full rounded-card border border-border bg-surface" />
       ) : (
         <p className="rounded-card border border-border bg-surface p-5 text-sm text-text-2">

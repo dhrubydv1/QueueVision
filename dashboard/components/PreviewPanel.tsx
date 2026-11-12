@@ -46,18 +46,24 @@ export function PreviewPanel({ videoId, active }: Readonly<{ videoId: number; ac
   return (
     <div>
       <div className="relative aspect-[3/2] w-full overflow-hidden rounded-card border border-border bg-chip">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          key={`${videoId}-${attempt}`}
-          src={previewMjpegUrl(videoId)}
-          alt="Annotated camera preview"
-          onError={onError}
-          onLoad={() => setFailed(false)}
-          className={`h-full w-full object-contain ${failed ? "invisible" : ""}`}
-        />
-        {failed ? (
-          <p className="absolute inset-0 flex items-center justify-center text-sm text-text-2">No preview frame yet</p>
-        ) : null}
+        {active ? (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              key={`${videoId}-${attempt}`}
+              src={previewMjpegUrl(videoId)}
+              alt="Annotated camera preview"
+              onError={onError}
+              onLoad={() => setFailed(false)}
+              className={`h-full w-full object-contain ${failed ? "invisible" : ""}`}
+            />
+            {failed ? (
+              <p className="absolute inset-0 flex items-center justify-center text-sm text-text-2">No preview frame yet</p>
+            ) : null}
+          </>
+        ) : (
+          <p className="absolute inset-0 flex items-center justify-center text-sm text-text-2">Run finished — open the recorded run</p>
+        )}
       </div>
       <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-2" aria-label="Preview legend">
         {LEGEND.map((item) => (

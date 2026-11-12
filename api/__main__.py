@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 
 from api.settings import ApiSettings, SettingsError, is_loopback
 
@@ -39,6 +40,10 @@ def main(argv: list[str] | None = None) -> None:
 
     logging.basicConfig(level=logging.INFO)
     warn_if_exposed(args.host)
+    # The app builds its settings from the environment (also in --reload children), so the CLI
+    # values must be visible there for the allowed-origins check to match the real address.
+    os.environ["QUEUEVISION_HOST"] = args.host
+    os.environ["QUEUEVISION_PORT"] = str(args.port)
 
     uvicorn.run(
         "api.main:app",

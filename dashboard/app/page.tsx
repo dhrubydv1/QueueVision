@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
+import { useSyncExternalStore } from "react";
 import { AccuracySummaryCard } from "@/components/AccuracySummaryCard";
 import { EmptyState } from "@/components/EmptyState";
 import { ProcessingRunCard } from "@/components/ProcessingRunCard";
@@ -18,7 +19,9 @@ export default function OverviewPage() {
   const runs = [...(runsQuery.data ?? [])].sort(newestFirst);
   const processing = runs.filter((r) => r.status === "processing");
   const completed = runs.filter((r) => r.status === "completed").slice(0, 3);
-  const date = new Intl.DateTimeFormat("en-GB", { dateStyle: "full" }).format(new Date());
+  const mounted = useSyncExternalStore(() => () => {}, () => true, () => false);
+  const date = mounted ? new Intl.DateTimeFormat("en-GB", { dateStyle: "full" }).format(new Date()) : null;
+  const processingText = runsQuery.isSuccess ? `${processing.length} ${processing.length === 1 ? "run" : "runs"} processing` : null;
   const windowFor = (cameraId: string) => cameras.data?.find((c) => c.id === cameraId)?.smoothing_window_s ?? null;
 
   return (
@@ -26,7 +29,7 @@ export default function OverviewPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-display text-[28px] font-semibold text-text">Overview</h1>
-          <p className="text-sm text-text-2">{`${date} · ${processing.length} ${processing.length === 1 ? "run" : "runs"} processing`}</p>
+          <p className="text-sm text-text-2">{[date, processingText].filter(Boolean).join(" · ")}</p>
         </div>
         <Link href="/runs#upload" className="rounded-control bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-hover">
           Upload a video
