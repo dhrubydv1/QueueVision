@@ -70,3 +70,11 @@ def test_legacy_page_served(tmp_path: Path, export_dir: Path) -> None:
         response = client.get("/legacy/")
         assert response.status_code == 200 and "QueueVision" in response.text
         assert "INDEX-PAGE" not in response.text
+
+
+def test_legacy_without_slash_redirects(tmp_path: Path, export_dir: Path) -> None:
+    for dashboard in (export_dir, tmp_path / "absent"):
+        with TestClient(create_app(make_settings(tmp_path, dashboard), WalkerTracker)) as client:
+            response = client.get("/legacy", follow_redirects=True)
+            assert response.status_code == 200 and "QueueVision" in response.text
+            assert "INDEX-PAGE" not in response.text and "NOT-FOUND-PAGE" not in response.text

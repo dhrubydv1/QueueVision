@@ -17,7 +17,14 @@ from typing import Annotated, Any
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket
 from fastapi import Path as PathParam
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.routing import APIRoute
 from starlette.websockets import WebSocketDisconnect
 
@@ -442,6 +449,10 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
     static_dir = Path(__file__).parent / "static"
     if static_dir.is_dir():
         app.mount("/legacy", StaticFiles(directory=static_dir, html=True), name="legacy")
+
+    @app.get("/legacy", include_in_schema=False)
+    def legacy_redirect() -> RedirectResponse:
+        return RedirectResponse("/legacy/", status_code=307)
 
     dashboard_dir = settings.dashboard_dir
 
