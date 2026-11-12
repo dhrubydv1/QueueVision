@@ -17,7 +17,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket
 from fastapi import Path as PathParam
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 from starlette.websockets import WebSocketDisconnect
 
@@ -75,6 +75,28 @@ def _open(settings: ApiSettings) -> Iterator:
         yield conn
     finally:
         conn.close()
+
+
+DASHBOARD_NOT_BUILT_HTML = (
+    "<!doctype html><meta charset=utf-8><title>QueueVision</title>"
+    "<p>Dashboard not built. Run: cd dashboard &amp;&amp; npm ci &amp;&amp; npm run build "
+    '&mdash; then reload. The old test page is at <a href="/legacy">/legacy</a>.</p>'
+)
+
+
+def _safe_file(root: Path, relative: str) -> Path | None:
+    """The regular file at ``root/relative``, or None if missing or resolving outside ``root``."""
+    try:
+        resolved = (root / relative.lstrip("/")).resolve()
+        if resolved.is_relative_to(root) and resolved.is_file():
+            return resolved
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _media_type(path: Path) -> str | None:
+    return "text/javascript" if path.suffix == ".js" else None
 
 
 def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFactory | None = None) -> FastAPI:
@@ -419,7 +441,27 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
 
     static_dir = Path(__file__).parent / "static"
     if static_dir.is_dir():
-        app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+        app.mount("/legacy", StaticFiles(directory=static_dir, html=True), name="legacy")
+
+    dashboard_dir = settings.dashboard_dir
+
+    @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+    def dashboard(path: str) -> Response:
+        if path in ("api", "ws") or path.startswith(("api/", "ws/")):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+        if not dashboard_dir.is_dir():
+            return HTMLResponse(DASHBOARD_NOT_BUILT_HTML)
+        root = dashboard_dir.resolve()
+        candidates = (path, f"{path}.html", f"{path}/index.html") if path else ("index.html",)
+        for candidate in candidates:
+            found = _safe_file(root, candidate)
+            if found is not None:
+                return FileResponse(found, media_type=_media_type(found))
+        not_found = _safe_file(root, "404.html")
+        if not_found is not None:
+            return FileResponse(not_found, status_code=404, media_type="text/html")
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+
     return app
 
 

@@ -61,6 +61,7 @@ class ApiSettings:
     max_video_seconds: float = 1800.0
     max_frame_pixels: int = 3840 * 2160
     allowed_origins: tuple[str, ...] | None = None  # None: derive the defaults from host/port
+    dashboard_dir: Path = PROJECT_ROOT / "dashboard" / "out"  # Next.js static export
 
     @property
     def db_path(self) -> Path:
@@ -98,6 +99,7 @@ class ApiSettings:
             allowed_origins=parse_origins(origins) if origins and origins.strip() else None,
             data_dir=Path(env.get("QUEUEVISION_DATA_DIR") or defaults.data_dir),
             camera_dir=Path(env.get("QUEUEVISION_CAMERA_DIR") or defaults.camera_dir),
+            dashboard_dir=Path(env.get("QUEUEVISION_DASHBOARD_DIR") or defaults.dashboard_dir),
             max_upload_bytes=int(float(max_mb) * 1024 * 1024) if max_mb else defaults.max_upload_bytes,
             host=env.get("QUEUEVISION_HOST") or defaults.host,
             port=int(port) if port else defaults.port,

@@ -284,7 +284,7 @@ def test_cancel_endpoint(settings, clip) -> None:
 
 def test_test_page_is_served_and_offline(settings) -> None:
     with make_client(settings) as client:
-        response = client.get("/")
+        response = client.get("/legacy/")
         assert response.status_code == 200 and "text/html" in response.headers["content-type"]
         for element_id in ("upload-form", "progress", "live-numbers", "events", "player", "runs"):
             assert f'id="{element_id}"' in response.text
