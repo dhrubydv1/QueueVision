@@ -15,11 +15,11 @@ run; items not run are marked pending.
 
 | Command | Baseline (before any change, 2026-11-12) | Final (end of session 2) |
 |---|---|---|
-| `.venv/bin/pytest -q` | 403 passed | 438 passed (35 new Python tests), 35.61 s |
-| `.venv/bin/pytest -m "not integration" -q` | 392 passed, 11 deselected | 427 passed, 11 deselected, 22.08 s |
+| `.venv/bin/pytest -q` | 403 passed | 440 passed (37 new Python tests; 35 in session 2 plus 2 in the final fix wave), 34.76 s |
+| `.venv/bin/pytest -m "not integration" -q` | 392 passed, 11 deselected | 429 passed, 11 deselected, 21.67 s |
 | `.venv/bin/ruff check .` and `ruff format --check .` | clean | clean |
 | `cd dashboard && npm run lint` / `npm run typecheck` | n/a (no dashboard) | both clean |
-| `npm test` (Vitest, jsdom, Testing Library) | n/a | 13 files, 107 tests passed |
+| `npm test` (Vitest, jsdom, Testing Library) | n/a | 15 files, 114 tests passed |
 | `npm run build` (static export) | n/a | succeeded; 7 static pages generated |
 
 The existing tests pass unchanged except one deliberate change: the Sprint 4 test of the
@@ -41,9 +41,13 @@ typecheck, Vitest, build) and an OpenAPI staleness step in `lint-and-unit` were 
 `.github/workflows/ci.yml`. They have **not been run on GitHub yet** (pending: the branch
 is not pushed).
 
+### Final fix wave (after the whole-branch review)
+
+Fixed, each test-first where a test is named: `python -m api --port/--host` now reach the app settings (allowed origins); a blur-off run's video is not shown in the dashboard (controller ruling; upload option and API option kept); the Overview no longer flashes the build date or "0 runs processing"; `PreviewPanel` makes no request for a finished run; a preview encode error no longer fails a run; `pydantic==2.14.2` pinned in CI and `requirements.txt`; `ProcessingRunCard` shows a neutral chip during the first connect. Counts above include these.
+
 ### End-to-end (Playwright, real API, real model)
 
-`cd dashboard && npm run build && npm run e2e` (Task 14b report): **10 passed in 2.2 min**,
+`cd dashboard && npm run build && npm run e2e`: **10 passed in 2.2 min** when measured at 3b3914c (Task 14b), and **10 passed in 1.9 min** re-run at the final head after the final fix wave,
 Chromium 5 and WebKit 5, one run, no retries. Playwright 1.64.1; its bundled Chromium is
 156.0.8078.4 (`browsers.json`). The API ran on port 8765 with a temporary data directory,
 the real YOLO11n on `cad_seq25`. The five tests per browser:

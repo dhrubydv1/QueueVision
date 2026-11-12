@@ -308,7 +308,7 @@ scripts/demo.sh
 ```
 
 It builds the dashboard if `dashboard/out/` is missing (`npm ci` then
-`npm run build`; the only network use), runs `scripts/export_accuracy.py`
+`npm run build`; the only network use, apart from `next/font` downloading fonts at build time), runs `scripts/export_accuracy.py`
 (writes the git-ignored `data/accuracy.json` from evaluation files on disk) and
 starts `python -m api`. Open http://127.0.0.1:8000. If `dashboard/out/` does not
 exist, `/` shows a short message that says how to build it.

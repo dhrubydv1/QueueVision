@@ -35,13 +35,13 @@ Deviations from "newest stable at least two weeks old" (reasons from the Task 7 
 
 | Command | Baseline | Final |
 |---|---|---|
-| `.venv/bin/pytest -q` | 403 passed | 438 passed |
-| `.venv/bin/pytest -m "not integration"` | 392 passed, 11 deselected | 427 passed, 11 deselected |
+| `.venv/bin/pytest -q` | 403 passed | 440 passed |
+| `.venv/bin/pytest -m "not integration"` | 392 passed, 11 deselected | 429 passed, 11 deselected |
 | `ruff check .`, `ruff format --check .` | clean | clean |
 | `npm run lint`, `npm run typecheck` | n/a | clean |
-| `npm test` (Vitest) | n/a | 13 files, 107 passed |
+| `npm test` (Vitest) | n/a | 15 files, 114 passed |
 | `npm run build` | n/a | succeeded (7 static pages) |
-| `npm run e2e` (Playwright, not re-run for this report; Task 14b result) | n/a | 10 passed (Chromium 5, WebKit 5) in 2.2 min |
+| `npm run e2e` (Playwright; re-run at the final head, after the final fix wave) | n/a | 10 passed (Chromium 5, WebKit 5) in 1.9 min. The earlier 10/10 in 2.2 min was measured at 3b3914c |
 
 One existing test changed on purpose: the Sprint 4 test-page test now requests `/legacy/` (the page moved, spec A5).
 
@@ -75,7 +75,20 @@ Screenshots (gitignored under `outputs/**`, CAD-derived, **never commit or embed
 * **Fetches use relative `/api`** (the Next dev rewrite); media (MJPEG, video) use port 8000 directly under `next dev`, because the dev proxy may buffer MJPEG.
 * **Branch base:** PR #6 tip rather than `main`; its PR targets the #6 branch until #5/#6 merge.
 * **Overview "waiting time" and measured-wait display** show a placeholder when `waiting_time` is non-null (its shape is unspecified until session 3).
+* **Blur-off runs show no video in the dashboard (controller ruling).** A run processed with `blur_heads` off has an unblurred annotated video, so `RunDetail` does not render the `<video>` for it and shows "This run was processed with head blurring off, so its annotated video is not shown in the dashboard." The upload checkbox and the API option are kept.
 * **Accuracy export:** the `sprint` field is the string "Sprint 6"; the "outside zone" category is the sum of two engine keys; the limits list counts only `cad_` clips.
+
+## 7b. Final fix wave (whole-branch review of b0f74a5..f281c30)
+
+1. `python -m api --port N` / `--host X` now set `QUEUEVISION_PORT` / `QUEUEVISION_HOST` before `uvicorn.run`, so the allowed-origins check matches the real address (also in `--reload` children). Tested.
+2. Blur-off runs: video hidden in `RunDetail` (see section 7). Tested both ways.
+3. Overview renders the date only after mount and the "N runs processing" count only once the runs query has succeeded.
+4. `PreviewPanel` renders no `<img>` (so makes no request) when the run is not active; it shows "Run finished — open the recorded run".
+5. A preview encode error is logged (`preview encode failed for run N`) and no longer fails the run. Tested.
+6. CI `lint-and-unit` and `requirements.txt` pin `pydantic==2.14.2`.
+7. `ProcessingRunCard` uses the LiveRunView offline rule (closed, or connecting after data); neutral "Processing" chip during the first connect.
+
+Final counts after this wave: 440 passed (full), 429 passed / 11 deselected (not integration), 114 Vitest tests in 15 files, e2e 10 passed at the final head.
 
 ## 8. Issues and deferred minors worth knowing
 
