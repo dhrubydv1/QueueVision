@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import re
@@ -393,6 +394,20 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
             unsubscribe()
             if receiver is not None and not receiver.done():
                 receiver.cancel()
+
+    @app.get("/api/accuracy")
+    def accuracy() -> JSONResponse:
+        try:
+            text = settings.accuracy_path.read_text()
+        except FileNotFoundError:
+            raise HTTPException(
+                404, "accuracy data not generated; run python scripts/export_accuracy.py"
+            ) from None
+        try:
+            return JSONResponse(json.loads(text))
+        except ValueError:
+            LOGGER.error("accuracy data at %s is not valid JSON", settings.accuracy_path)
+            raise HTTPException(500, "accuracy data unreadable") from None
 
     app.include_router(upload_router)
 

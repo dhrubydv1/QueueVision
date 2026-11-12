@@ -56,6 +56,10 @@ class ApiSettings:
     def outputs_dir(self) -> Path:
         return self.data_dir / "outputs"
 
+    @property
+    def accuracy_path(self) -> Path:
+        return self.data_dir / "accuracy.json"
+
     @classmethod
     def from_env(cls) -> ApiSettings:
         env = os.environ
