@@ -11,6 +11,7 @@ import contextlib
 import logging
 import math
 import threading
+import time
 from collections import deque
 from collections.abc import Callable
 from typing import Any
@@ -158,8 +159,17 @@ def _put(queue: asyncio.Queue, message: dict) -> None:
 class JobManager:
     """Runs queued videos one at a time on a single worker thread."""
 
-    def __init__(self, settings: ApiSettings, tracker_factory: TrackerFactory) -> None:
+    def __init__(
+        self,
+        settings: ApiSettings,
+        tracker_factory: TrackerFactory,
+        clock: Callable[[], float] = time.monotonic,
+        wait: Callable[[float], object] | None = None,
+    ) -> None:
         self.settings = settings
+        self._clock = clock
+        self._interrupt = threading.Event()  # wakes a real-time pacing wait on cancel/stop
+        self._wait = wait if wait is not None else self._interrupt.wait
         self._factory = tracker_factory
         self._cond = threading.Condition()
         self._pending: deque[int] = deque()
@@ -196,6 +206,7 @@ class JobManager:
     def stop(self, timeout: float = 30.0) -> None:
         """Ask the worker to stop; the current job ends ``cancelled``."""
         self._stop.set()
+        self._interrupt.set()
         with self._cond:
             self._cond.notify_all()
         if self._thread is not None:
@@ -217,6 +228,7 @@ class JobManager:
                 queued = True
             elif self._current == video_id:
                 self._cancel_current.set()
+                self._interrupt.set()
                 return True
             else:
                 return False
@@ -292,6 +304,7 @@ class JobManager:
                         return
                     self._current = self._pending.popleft()
                     self._cancel_current.clear()
+                    self._interrupt.clear()
                 video_id = self._current
                 try:
                     self._process(conn, video_id)
@@ -357,6 +370,8 @@ class JobManager:
         events: list[dict] = []
         rows: list[dict] = []
         state = {"frames": 0, "next_second": 0}  # frames: source frames done
+        realtime = bool(options.get("realtime", False))
+        pacing: dict[str, float] = {}  # "start": clock reading at video time 0
 
         def flush() -> None:
             with conn:  # one transaction for the whole batch
@@ -384,6 +399,12 @@ class JobManager:
                 message = progress_message(video_id, update)
                 self._live[video_id] = message
                 self._publish(video_id, message)
+            if realtime:  # pace to video time; a late run never waits, so lag does not build up
+                if "start" not in pacing:
+                    pacing["start"] = self._clock() - update.timestamp_s
+                delay = pacing["start"] + update.timestamp_s - self._clock()
+                if delay > 0:
+                    self._wait(delay)
 
         report = process_video(
             source,

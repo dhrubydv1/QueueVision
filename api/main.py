@@ -178,6 +178,7 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
         frame_stride: Annotated[int, Form(ge=1, le=10)] = 1,
         blur_heads: Annotated[bool, Form()] = True,
         max_frames: Annotated[int | None, Form(ge=1)] = None,
+        realtime: Annotated[bool, Form()] = False,
     ) -> dict:
         name = sanitize_filename(file.filename or "")
         ext = Path(name).suffix.lower()
@@ -193,7 +194,12 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
             LOGGER.warning("Upload rejected, camera %r: %s", camera_id, error)
             raise HTTPException(400, f"unknown or invalid camera {camera_id!r}") from error
 
-        options = {"frame_stride": frame_stride, "blur_heads": blur_heads, "max_frames": max_frames}
+        options = {
+            "frame_stride": frame_stride,
+            "blur_heads": blur_heads,
+            "max_frames": max_frames,
+            "realtime": realtime,
+        }
         with _open(settings) as conn:
             video_id = db.create_video(conn, name, camera_id, options)
             folder = settings.uploads_dir / str(video_id)

@@ -29,6 +29,7 @@ class RunOptions(BaseModel):
     frame_stride: int = 1
     blur_heads: bool = True
     max_frames: int | None = None
+    realtime: bool = False
 
 
 class Run(BaseModel):
