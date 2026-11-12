@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, apiGet, cancelRun, previewMjpegUrl, timeseriesCsvUrl, uploadVideo } from "./api";
+import { ApiError, apiGet, cancelRun, previewMjpegUrl, reportUrl, timeseriesCsvUrl, uploadVideo, videoUrl } from "./api";
 
 function respond(status: number, body: unknown, json = true): Response {
   return new Response(json ? JSON.stringify(body) : String(body), {
@@ -60,5 +60,30 @@ describe("writes and URLs", () => {
   it("builds media URLs", () => {
     expect(previewMjpegUrl(4)).toMatch(/\/api\/videos\/4\/preview\.mjpg$/);
     expect(timeseriesCsvUrl(4)).toMatch(/\/api\/videos\/4\/timeseries\.csv$/);
+  });
+});
+
+describe("base URLs", () => {
+  it("on port 3000 fetches relative URLs and media goes straight to the API", async () => {
+    vi.stubGlobal("location", { port: "3000", protocol: "http:", host: "localhost:3000" });
+    const fetchMock = vi.fn().mockImplementation(async () => respond(200, []));
+    vi.stubGlobal("fetch", fetchMock);
+    await apiGet("/api/videos");
+    await uploadVideo(new FormData());
+    await cancelRun(1);
+    for (const call of fetchMock.mock.calls) expect(call[0]).toMatch(/^\/api\//);
+    expect(previewMjpegUrl(2)).toBe("http://127.0.0.1:8000/api/videos/2/preview.mjpg");
+    expect(videoUrl(2)).toBe("http://127.0.0.1:8000/api/videos/2/video");
+    expect(reportUrl(2)).toBe("/api/videos/2/report");
+    expect(timeseriesCsvUrl(2)).toBe("/api/videos/2/timeseries.csv");
+  });
+  it("on another port everything is same-origin relative", async () => {
+    vi.stubGlobal("location", { port: "8000", protocol: "http:", host: "127.0.0.1:8000" });
+    const fetchMock = vi.fn().mockImplementation(async () => respond(200, []));
+    vi.stubGlobal("fetch", fetchMock);
+    await apiGet("/api/videos");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/videos");
+    expect(previewMjpegUrl(2)).toBe("/api/videos/2/preview.mjpg");
+    expect(videoUrl(2)).toBe("/api/videos/2/video");
   });
 });

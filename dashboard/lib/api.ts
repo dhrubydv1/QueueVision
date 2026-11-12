@@ -20,8 +20,13 @@ export class ApiError extends Error {
   }
 }
 
-/** NEXT_PUBLIC_API_URL if set; the API on :8000 when served by `next dev` (port 3000); else same origin. */
+/** Fetch base: NEXT_PUBLIC_API_URL if set, else relative (`next dev` proxies /api/* to the API). */
 export function apiBase(): string {
+  return (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+}
+
+/** Base for <img>/<video> sources (no CORS needed; avoids the dev proxy buffering MJPEG). */
+export function mediaBase(): string {
   const configured = process.env.NEXT_PUBLIC_API_URL;
   if (configured) return configured.replace(/\/$/, "");
   if (typeof location !== "undefined" && location.port === "3000") return "http://127.0.0.1:8000";
@@ -89,7 +94,7 @@ export const uploadVideo = (form: FormData) => send<Run>("/api/videos", { method
 export const cancelRun = (id: number) => send<Run>(`/api/videos/${id}/cancel`, { method: "POST" });
 export const deleteRun = (id: number) => send<void>(`/api/videos/${id}`, { method: "DELETE" });
 
-export const previewMjpegUrl = (id: number) => `${apiBase()}/api/videos/${id}/preview.mjpg`;
-export const videoUrl = (id: number) => `${apiBase()}/api/videos/${id}/video`;
+export const previewMjpegUrl = (id: number) => `${mediaBase()}/api/videos/${id}/preview.mjpg`;
+export const videoUrl = (id: number) => `${mediaBase()}/api/videos/${id}/video`;
 export const reportUrl = (id: number) => `${apiBase()}/api/videos/${id}/report`;
 export const timeseriesCsvUrl = (id: number) => `${apiBase()}/api/videos/${id}/timeseries.csv`;

@@ -46,7 +46,10 @@ beforeEach(() => {
   vi.useFakeTimers();
   FakeSocket.instances = [];
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 function mount(id: number | null = 1) {
   let t = 1000;
@@ -168,5 +171,26 @@ describe("useLiveSocket", () => {
     unmount();
     act(() => vi.advanceTimersByTime(60_000));
     expect(FakeSocket.instances).toHaveLength(1);
+  });
+
+  it("ends without reconnecting when a completed run's snapshot is followed by a normal close", () => {
+    const { result } = mount();
+    act(() => { last().open(); last().message(snapshot(1, "completed")); });
+    act(() => last().close(1000));
+    expect(result.current.connectionState).toBe("ended");
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(FakeSocket.instances).toHaveLength(1);
+  });
+
+  it("defaults to the API on :8000 under port 3000", () => {
+    vi.stubGlobal("location", { port: "3000", protocol: "http:", host: "localhost:3000" });
+    renderHook(() => useLiveSocket(5, { WebSocketImpl: Impl }));
+    expect(last().url).toBe("ws://127.0.0.1:8000/ws/videos/5");
+  });
+
+  it("defaults to wss on the same host over https", () => {
+    vi.stubGlobal("location", { port: "", protocol: "https:", host: "demo.example:443" });
+    renderHook(() => useLiveSocket(5, { WebSocketImpl: Impl }));
+    expect(last().url).toBe("wss://demo.example:443/ws/videos/5");
   });
 });
