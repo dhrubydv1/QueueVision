@@ -22,6 +22,8 @@ class CameraInfo(BaseModel):
     description: str = ""
     has_service_point: bool = False
     alerts_enabled: bool = False
+    max_queue_length: float | None = None
+    smoothing_window_s: float | None = None
     error: str | None = None
 
 

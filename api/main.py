@@ -197,6 +197,8 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
                     "description": cam.description,
                     "has_service_point": cam.service_line is not None or cam.service_zone is not None,
                     "alerts_enabled": cam.alerts.enabled,
+                    "max_queue_length": cam.alerts.max_queue_length,
+                    "smoothing_window_s": cam.smoothing.window_seconds,
                 }
             )
         return out

@@ -64,6 +64,8 @@ def test_health_and_cameras(settings) -> None:
         cams = {c["id"]: c for c in client.get("/api/cameras").json()}
         assert cams["walker"]["error"] is None and cams["walker"]["has_service_point"] is True
         assert cams["walker"]["alerts_enabled"] is True
+        assert cams["walker"]["max_queue_length"] == 0.5
+        assert cams["walker"]["smoothing_window_s"] == 2.0
         assert cams["broken"]["error"]
 
 
