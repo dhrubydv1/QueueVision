@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Space_Grotesk } from "next/font/google";
 import "./globals.css";
+import { AppHeader } from "@/components/AppHeader";
 import { Providers } from "./providers";
 
 // next/font downloads and self-hosts these at build time: nothing loads from a CDN at runtime.
@@ -16,7 +17,10 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable}`}>
       <body>
-        <Providers>{children}</Providers>
+        <Providers>
+          <AppHeader />
+          <div className="pb-16 md:pb-0">{children}</div>
+        </Providers>
       </body>
     </html>
   );
