@@ -23,3 +23,11 @@ export function formatSeconds(s: number | null): string {
 export function formatNumber(n: number | null | undefined, digits: number): string {
   return n === null || n === undefined || !Number.isFinite(n) ? DASH : n.toFixed(digits);
 }
+
+/** Number with an explicit sign (true minus sign U+2212 for negatives). */
+export function formatSigned(n: number, digits: number): string {
+  const text = formatNumber(Math.abs(n), digits);
+  if (n > 0) return `+${text}`;
+  if (n < 0) return `\u2212${text}`;
+  return text;
+}

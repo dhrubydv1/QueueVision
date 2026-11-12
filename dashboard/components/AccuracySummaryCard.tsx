@@ -1,15 +1,8 @@
 import { ApiError } from "@/lib/api";
 import type { AccuracyData } from "@/lib/accuracy-types";
-import { formatNumber } from "@/lib/format";
+import { formatNumber, formatSigned as signed } from "@/lib/format";
 
 export const NOT_GENERATED = "Accuracy data not generated — run scripts/export_accuracy.py";
-
-function signed(n: number, digits: number): string {
-  const text = formatNumber(Math.abs(n), digits);
-  if (n > 0) return `+${text}`;
-  if (n < 0) return `−${text}`;
-  return text;
-}
 
 function Figure({ label, value, frames }: Readonly<{ label: string; value: string; frames: number }>) {
   return (
