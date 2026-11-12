@@ -16,7 +16,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket
 from fastapi import Path as PathParam
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 from starlette.websockets import WebSocketDisconnect
 
@@ -32,6 +32,7 @@ from api.jobs import (
     status_message,
 )
 from api.models import Alert, CameraInfo, Health, Run, TimeseriesRow, Wait
+from api.preview import MJPEG_BOUNDARY, mjpeg_part
 from api.settings import ApiSettings
 from api.upload_validation import UploadRejected, sanitize_filename, validate_upload
 
@@ -41,6 +42,7 @@ MAX_VIDEO_ID = 2**63 - 1  # SQLite INTEGER is a signed 64-bit value; larger ids 
 VideoId = Annotated[int, PathParam(ge=1, le=MAX_VIDEO_ID)]
 PART_SUFFIX = ".part"
 WS_NOT_FOUND = 4404
+MJPEG_POLL_S = 0.1
 _CAMERA_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -286,6 +288,43 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
         if record["status"] != "completed" or not path.is_file():
             raise HTTPException(404, "annotated video not available")
         return FileResponse(path, media_type="video/mp4")  # Starlette answers Range requests with 206
+
+    def first_preview(video_id: int) -> tuple[int, bytes]:
+        record = get_record(video_id)
+        if record["status"] != "processing":
+            raise HTTPException(404, "no preview: run is not processing")
+        latest = jobs.preview.latest(video_id)
+        if latest is None:
+            raise HTTPException(404, "no preview frame yet")
+        return latest
+
+    @app.get("/api/videos/{video_id}/preview.jpg")
+    def preview_jpg(video_id: VideoId) -> Response:
+        _, jpeg = first_preview(video_id)
+        return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/videos/{video_id}/preview.mjpg")
+    def preview_mjpg(video_id: VideoId, request: Request) -> StreamingResponse:
+        sequence, jpeg = first_preview(video_id)
+
+        async def parts():
+            last, current = -1, (sequence, jpeg)
+            while True:
+                if current is not None and current[0] != last:
+                    last = current[0]
+                    yield mjpeg_part(current[1])
+                await asyncio.sleep(MJPEG_POLL_S)
+                if await request.is_disconnected():
+                    return
+                current = jobs.preview.latest(video_id)
+                if current is None:  # the run ended: the store is dropped when processing stops
+                    return
+
+        return StreamingResponse(
+            parts(),
+            media_type=f"multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY}",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.post("/api/videos/{video_id}/cancel", response_model=Run)
     def cancel(video_id: VideoId) -> dict:

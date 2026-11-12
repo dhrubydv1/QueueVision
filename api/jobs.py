@@ -22,6 +22,7 @@ from ai_engine import config
 from ai_engine.queue.camera_config import load_camera_config
 from ai_engine.run_tracking import FrameUpdate, RunOptions, process_video
 from api import db
+from api.preview import PreviewStore
 from api.settings import ApiSettings
 
 LOGGER = logging.getLogger("queuevision.api")
@@ -171,6 +172,7 @@ class JobManager:
         self._interrupt = threading.Event()  # wakes a real-time pacing wait on cancel/stop
         self._wait = wait if wait is not None else self._interrupt.wait
         self._factory = tracker_factory
+        self.preview = PreviewStore()
         self._cond = threading.Condition()
         self._pending: deque[int] = deque()
         self._current: int | None = None
@@ -385,6 +387,8 @@ class JobManager:
 
         def on_frame(update: FrameUpdate) -> None:
             state["frames"] = update.frame_index + 1
+            if update.image is not None:
+                self.preview.offer(video_id, update.image, update.people, self._clock())
             queue = update.queue
             if queue is not None:
                 for event in queue.events:
@@ -406,19 +410,23 @@ class JobManager:
                 if delay > 0:
                     self._wait(delay)
 
-        report = process_video(
-            source,
-            tracker,
-            RunOptions(
-                output_dir=output_dir,
-                camera=camera,
-                frame_stride=stride,
-                max_frames=options.get("max_frames"),
-                blur_heads=bool(options.get("blur_heads", True)),
-            ),
-            on_frame=on_frame,
-            should_stop=self._should_stop,
-        )
+        try:
+            report = process_video(
+                source,
+                tracker,
+                RunOptions(
+                    output_dir=output_dir,
+                    camera=camera,
+                    frame_stride=stride,
+                    max_frames=options.get("max_frames"),
+                    blur_heads=bool(options.get("blur_heads", True)),
+                ),
+                on_frame=on_frame,
+                should_stop=self._should_stop,
+                frame_callback_wants_image=True,
+            )
+        finally:
+            self.preview.drop(video_id)
         flush()
         stopped = bool(report.get("stopped_early"))  # a cancel after the last frame leaves the run completed
         self._finish(conn, video_id, "cancelled" if stopped else "completed", report=report)
