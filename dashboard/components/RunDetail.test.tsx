@@ -42,6 +42,7 @@ describe("RunDetail", () => {
     expect(await screen.findByRole("region", { name: "Joined" })).toHaveTextContent("21");
     expect(screen.getByRole("region", { name: "Service started" })).toHaveTextContent("8");
     expect(screen.getByRole("region", { name: "Left without service" })).toHaveTextContent("3");
+    expect(screen.getByRole("region", { name: "Left without service" })).toHaveTextContent("3 of 21 joins");
     expect(screen.getByRole("region", { name: "Left without service" })).not.toHaveTextContent("%");
     expect(screen.getByRole("region", { name: "Congestion alerts" })).toHaveTextContent("2");
     expect(screen.getByRole("region", { name: "Mean wait" })).toHaveTextContent("31 s");
@@ -78,6 +79,17 @@ describe("RunDetail", () => {
     await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(push).toHaveBeenCalledWith("/runs"));
     expect(api.deleteRun).toHaveBeenCalledWith(4);
+  });
+
+  it("shows the API message when delete fails with 409 and re-enables Delete", async () => {
+    vi.mocked(api.getRun).mockResolvedValue(run() as never);
+    vi.mocked(api.deleteRun).mockRejectedValueOnce(new api.ApiError("run is processing; cancel it first", 409));
+    view();
+    await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("run is processing; cancel it first");
+    expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
+    expect(push).not.toHaveBeenCalled();
   });
 
   it("disables Delete and shows a placeholder instead of a video while processing", async () => {

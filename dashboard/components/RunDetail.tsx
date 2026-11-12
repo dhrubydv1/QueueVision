@@ -44,12 +44,20 @@ function optionsSummary(run: Run): string {
   return `${ordinal(frame_stride)} · ${blur_heads ? "heads blurred" : "heads not blurred"} · ${realtime ? "real time" : "fast"}`;
 }
 
+/** Counts only, from the report's own figures: no percentage is computed in the browser. */
+function LeftWithoutService({ summary }: Readonly<{ summary: Run["summary"] }>) {
+  const left = pick(summary, "event_counts", "queue_abandon");
+  const joined = pick(summary, "event_counts", "queue_join");
+  if (left === undefined || joined === undefined) return <MetricCard label="Left without service" value={NOT_REPORTED} />;
+  return <MetricCard label="Left without service" value={String(left)} caption={`${left} of ${joined} joins`} />;
+}
+
 function SummaryCards({ summary }: Readonly<{ summary: Run["summary"] }>) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <MetricCard label="Joined" value={count(pick(summary, "event_counts", "queue_join"))} />
       <MetricCard label="Service started" value={count(pick(summary, "event_counts", "service_start"))} />
-      <MetricCard label="Left without service" value={count(pick(summary, "event_counts", "queue_abandon"))} />
+      <LeftWithoutService summary={summary} />
       <MetricCard label="Congestion alerts" value={count(pick(summary, "alerts", "congestion_starts"))} />
       <MetricCard label="Mean wait" tag="Unvalidated" value={wait(pick(summary, "waiting", "mean_wait_s"))} />
       <MetricCard label="Median wait" tag="Unvalidated" value={wait(pick(summary, "waiting", "median_wait_s"))} />
