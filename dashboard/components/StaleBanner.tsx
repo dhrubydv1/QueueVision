@@ -14,13 +14,25 @@ export function StaleBanner({
   children: React.ReactNode;
 }>) {
   const [, setTick] = useState(0);
+  const [openSince, setOpenSince] = useState<number | null>(null);
   useEffect(() => {
     const id = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(id);
   }, []);
+  // Baseline for a socket that opened but never delivered a message (adjusted during render).
+  const [seenState, setSeenState] = useState(connectionState);
+  if (seenState !== connectionState || (connectionState === "open" && openSince === null)) {
+    setSeenState(connectionState);
+    if (connectionState === "open") setOpenSince((prev) => prev ?? now());
+    else if (connectionState === "closed") setOpenSince(null);
+  }
 
-  const silent = lastMessageAt !== null && now() - lastMessageAt >= STALE_AFTER_MS;
-  const stale = connectionState === "closed" || (connectionState === "open" && silent);
+  const baseline = lastMessageAt ?? openSince;
+  const silent = baseline !== null && now() - baseline >= STALE_AFTER_MS;
+  const stale =
+    connectionState === "closed" ||
+    (connectionState === "connecting" && (lastMessageAt !== null)) ||
+    (connectionState === "open" && silent);
 
   if (!stale) return <div>{children}</div>;
   return (

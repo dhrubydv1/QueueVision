@@ -17,13 +17,30 @@ export function PreviewPanel({ videoId, active }: Readonly<{ videoId: number; ac
   const [failed, setFailed] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  useEffect(() => {
+    if (!active && timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+  }, [active]);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
+  const [shownId, setShownId] = useState(videoId);
+  if (shownId !== videoId) {
+    setShownId(videoId);
+    setAttempt(0);
+    setFailed(false);
+  }
 
   function onError() {
     setFailed(true);
     if (!active) return;
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => { setFailed(false); setAttempt((n) => n + 1); }, 2000);
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      setFailed(false);
+      setAttempt((n) => n + 1);
+    }, 2000);
   }
 
   return (
@@ -31,7 +48,7 @@ export function PreviewPanel({ videoId, active }: Readonly<{ videoId: number; ac
       <div className="relative aspect-[3/2] w-full overflow-hidden rounded-card border border-border bg-chip">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          key={attempt}
+          key={`${videoId}-${attempt}`}
           src={previewMjpegUrl(videoId)}
           alt="Annotated camera preview"
           onError={onError}

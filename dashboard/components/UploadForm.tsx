@@ -30,7 +30,8 @@ export function UploadForm({ cameras, onStarted }: Readonly<{ cameras: CameraInf
   }
 
   return (
-    <form onSubmit={onSubmit} className="flex flex-wrap items-end gap-4 rounded-card border border-border bg-surface p-5">
+    <form onSubmit={onSubmit} className="rounded-card border border-border bg-surface p-5">
+      <fieldset disabled={busy} className="flex flex-wrap items-end gap-4">
       <label className="flex flex-col gap-1 text-[13px] font-medium text-text-2">
         Video file
         <input type="file" name="file" accept="video/*" required className={`${CONTROL} py-1.5`} />
@@ -59,6 +60,7 @@ export function UploadForm({ cameras, onStarted }: Readonly<{ cameras: CameraInf
         Start
       </button>
       {error ? <p role="alert" className="basis-full text-sm text-danger">{error}</p> : null}
+      </fieldset>
     </form>
   );
 }
