@@ -1,9 +1,128 @@
 # Testing Report
 
-Sprint 6 results come first, then Sprints 5, 4, 3 and 2; the Sprint 1 report is
+Sprint 7 (session 2) results come first, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
 kept at the end. Every number here comes from a command that was actually run
 on the machine described under Sprint 2 (same environment). Nothing was
 estimated.
+
+## Sprint 7, session 2 (2026-11-12): dashboard, preview, real-time option
+
+Full write-up: [sprint7_session2_report.md](sprint7_session2_report.md). Machine, Python and
+Node: MacBook Air M1, Python 3.11 `.venv`, Node v22.23.2, npm 10.9.8. Everything below was
+run; items not run are marked pending.
+
+### Automated tests: baselines vs final
+
+| Command | Baseline (before any change, 2026-11-12) | Final (end of session 2) |
+|---|---|---|
+| `.venv/bin/pytest -q` | 403 passed | 438 passed (35 new Python tests), 35.61 s |
+| `.venv/bin/pytest -m "not integration" -q` | 392 passed, 11 deselected | 427 passed, 11 deselected, 22.08 s |
+| `.venv/bin/ruff check .` and `ruff format --check .` | clean | clean |
+| `cd dashboard && npm run lint` / `npm run typecheck` | n/a (no dashboard) | both clean |
+| `npm test` (Vitest, jsdom, Testing Library) | n/a | 13 files, 107 tests passed |
+| `npm run build` (static export) | n/a | succeeded; 7 static pages generated |
+
+The existing tests pass unchanged except one deliberate change: the Sprint 4 test of the
+served test page now requests `/legacy/` (the page moved; spec A5). New Python tests cover
+real-time pacing (identical outputs with `realtime` on and off, no lag build-up, wait
+interrupted by cancel; the cancel test was mutation-checked against `time.sleep`),
+`FrameUpdate.image` / `people` and CLI output identity, the preview store and routes
+(404 rules, MJPEG boundary format, blur of the head region even with `blur_heads` off, MJPEG
+ending on shutdown), the accuracy export on small synthetic files, the Origin check, the
+dashboard catch-all (including traversal and symlink escape) and `timeseries.csv`.
+Vitest covers `WaitCard` (value and range, Unknown, Insufficient data), `StaleBanner`,
+`useLiveSocket` (reconnect backoff and snapshot with a fake WebSocket), the API client,
+formatting (including "NPT"), the Live, Run and Accuracy views and the accuracy card.
+Not unit-tested: `QueueChart` geometry, `PreviewPanel` layout, `UploadForm`, `RunsTable`,
+`WaitsTable`, the Overview page itself (checked in the browser instead).
+
+CI: a `dashboard` job (Node 22: `npm ci`, generated-types staleness check, lint,
+typecheck, Vitest, build) and an OpenAPI staleness step in `lint-and-unit` were added to
+`.github/workflows/ci.yml`. They have **not been run on GitHub yet** (pending: the branch
+is not pushed).
+
+### End-to-end (Playwright, real API, real model)
+
+`cd dashboard && npm run build && npm run e2e` (Task 14b report): **10 passed in 2.2 min**,
+Chromium 5 and WebKit 5, one run, no retries. Playwright 1.64.1; its bundled Chromium is
+156.0.8078.4 (`browsers.json`). The API ran on port 8765 with a temporary data directory,
+the real YOLO11n on `cad_seq25`. The five tests per browser:
+
+1. Upload with real time on (`max_frames=150`) goes to the Live page, which updates; the run completes; the annotated video plays and seeks.
+2. The upload form in the UI (file, camera, real time ticked, Start) opens `/live?id=`.
+3. API crash (SIGKILL) while the Live page is open: the page shows Offline and "Last update", the API restarts, the page recovers without reload and shows Failed (a crash marks the run `failed`).
+4. Graceful API stop (SIGTERM): Offline, restart, the page shows Cancelled without reload.
+5. Phone viewport 390 x 844 on `/`, `/runs`, `/run`, `/live`, `/accuracy`: no horizontal scroll, controls reachable.
+
+Finding: the first run of test 3 expected Failed after a graceful stop; the worker ends the
+job `cancelled` then, so the assertion was split into two tests instead of weakened. The
+e2e tests skip themselves when the clip, model or venv are missing, so CI does not run them.
+The `/accuracy` phone check initially passed only because that e2e server had no
+`accuracy.json`; the e2e server now writes a synthetic one (made-up values, used only for the
+layout check).
+
+### Browser check (controller, 2026-11-12)
+
+Playwright Chromium and WebKit, desktop 1440 x 1000 and phone 390 x 844, time zone
+Asia/Kathmandu, against the real API with real data (completed runs 1 and 2 of `cad_seq25`).
+Screenshots are in `outputs/s7_screens/` (gitignored, derived from CAD, never committed; listed
+in the session report). They were viewed. What was found and fixed (Task 14b):
+
+| Finding | Cause | Status |
+|---|---|---|
+| `/accuracy` scrolled horizontally on a phone (scrollWidth 483) | Two visually hidden chart data tables (`sr-only`): a table ignores the 1 px width, so it stayed content-wide | Fixed; synthetic fully populated probe measured 718 before and 390 after in both engines |
+| Times showed "GMT+5:45" instead of "NPT" | The zone name was mapped only when a zone was passed explicitly | Fixed, unit-tested |
+| Live event feed not in time order | Events were shown in arrival order | Fixed: sorted by `timestamp_s`, ties newest arrival first |
+| Live page opened after a run finished showed "No events yet" | Events came only from the socket | Fixed: history is loaded from `/api/videos/{id}/events` and merged |
+
+Everything else checked looked right: Overview, Recorded runs and a run page (desktop and
+phone, both engines); heads blurred in the annotated video; "5 of 11 joins"; "Unvalidated" tags; chart
+band and markers; Live page (both engines, desktop and phone) with blurred preview, legend,
+"Raw count N" caption, "Insufficient data", "Not the queue length", dashed alert line and the final
+state with the recorded-run link. The screenshots were taken before the four fixes and were not re-taken; the fixes are verified by unit tests (each was written to fail first) and the final e2e run.
+
+**Not done (pending, needs a person):** real Chrome (the Claude in Chrome extension was not
+connected) and real Safari. WebKit through Playwright passed, which is not the same
+as Safari. No real phone was used.
+
+### Measurement: real-time run of `cad_seq25` (`scripts/measure_realtime.py`)
+
+Source: `outputs/s7_realtime/summary.json` (gitignored). `cad_seq25.mp4`: 617 frames, 30 fps,
+20.567 s, device `mps`, camera `cad_seq25`. Each pair is a normal run and a `realtime` run with
+the same frame stride.
+
+| | Stride 1 | Stride 3 |
+|---|---|---|
+| Frames processed (normal / real time) | 617 / 617 | 206 / 206 |
+| Normal run wall time | 30.346 s (includes the model load) | 9.163 s |
+| Real-time run wall time | 26.309 s | 21.392 s |
+| Real-time wall minus clip duration | +5.742 s | +0.825 s |
+| Pacing waits / total waited | 0 / 0.000 s | 205 / 8.785 s |
+| Real-time wall minus time waited | 26.309 s | 12.607 s |
+| Processing fps in the reports (normal / real time) | 25.67 / 25.45 | 25.22 / 18.11 |
+| Pacing exercised | **no** | yes |
+| Waits CSV, time series, events byte-identical to the normal run | yes (363, 1175, 10422 bytes) | yes (326, 1173, 7723 bytes) |
+
+Reading these honestly:
+
+* **Stride 1 never paced.** The detector processes about 25.5 frames a second, slower than the
+  clip's 30, so the pacer never had to wait. The +5.742 s is the processing shortfall, not a
+  pacing cost. This pair proves only that outputs are identical with the option on.
+* **Stride 3 did pace** (205 waits). The real-time run finished 0.825 s after the clip's
+  length. But its non-wait time (12.607 s) is 3.444 s longer than the whole normal run (9.163 s),
+  and the wait counter does not explain that gap. The cause was **not measured** (possible
+  suspects, unverified: per-frame callback and preview work, MPS variance). Figures vary from run to run
+  (an earlier stride-3 run in the same session gave +0.769 s; the 9.316 s waited and
+  9.645 s normal wall in that earlier run are superseded by the table).
+* One run per pair; no repeats, so no variance estimate. Machine load from other macOS daemons affected an
+  earlier e2e attempt (load average 40 to 120), so wall times are indicative.
+* Real-time mode can only pace when the machine processes faster than the clip plays; at stride 1 on this M1 it does not (25.5 fps against 30). Stride 2 was not measured.
+
+### Not run / pending
+
+* Real Chrome and real Safari checks (see above).
+* The `dashboard` CI job on GitHub.
+* Waiting-time accuracy: still not measured; session 3 (the sheets are not filled). The dashboard shows "Not measured yet".
 
 ## Sprint 6 (2026-11-09)
 

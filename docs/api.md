@@ -1,4 +1,4 @@
-# QueueVision API (Sprint 4)
+# QueueVision API (Sprint 4, extended in Sprint 7)
 
 A small local web service around the engine: upload a recorded video, watch
 progress and live queue numbers over a WebSocket, then play the annotated
@@ -18,7 +18,7 @@ python -m api --host 127.0.0.1 --port 8001
 python -m api --reload             # restart on code changes (development)
 ```
 
-Open http://127.0.0.1:8000 for the demo test page. Interactive API docs are at
+Open http://127.0.0.1:8000 for the dashboard (the old demo test page is at `/legacy`; see [Sprint 7 additions](#sprint-7-additions)). Interactive API docs are at
 `/docs` (FastAPI's built-in page).
 
 | Flag | Default | Meaning |
@@ -42,6 +42,8 @@ is not auto-loaded):
 | `QUEUEVISION_MAX_QUEUED_JOBS` | `5` | Runs allowed to *wait* in the queue (the running one is not counted); further uploads get `429` |
 | `QUEUEVISION_MAX_VIDEO_SECONDS` | `1800` | Longest accepted video (frame count / fps); longer uploads get `400` |
 | `QUEUEVISION_MAX_FRAME_PIXELS` | `8294400` (3840x2160) | Largest accepted frame (width x height); larger uploads get `400` |
+| `QUEUEVISION_ALLOWED_ORIGINS` | the API's own origin and `http://localhost:3000` | Comma-separated browser origins allowed to open the WebSocket (Sprint 7) |
+| `QUEUEVISION_DASHBOARD_DIR` | `dashboard/out/` in the repository | Folder with the dashboard's static export, served at `/` (Sprint 7) |
 
 The three limits above must be positive numbers (`QUEUEVISION_MAX_QUEUED_JOBS`
 an integer). A bad value stops the server at start-up with an error naming the
@@ -95,7 +97,7 @@ every route (the WebSocket is closed with code 1008 before it is accepted).
 | Method and path | Returns |
 |---|---|
 | `GET /api/health` | `status`, `device` (the device the loaded detector runs on, e.g. `mps`; `null` until a job has loaded the model), `configured_device` (the `--device` setting, e.g. `auto`), `model`, `queue_depth` |
-| `GET /api/cameras` | One entry per `*.yaml` in the camera directory: `id`, `description`, `has_service_point`, `alerts_enabled`, `error` (set, with the rest empty, for an invalid file) |
+| `GET /api/cameras` | One entry per `*.yaml` in the camera directory: `id`, `description`, `has_service_point`, `alerts_enabled`, `max_queue_length`, `smoothing_window_s` (both optional, Sprint 7), `error` (set, with the rest empty, for an invalid file) |
 | `POST /api/videos` | `202` and the run record. Multipart form, see below |
 | `GET /api/videos` | All runs, newest first |
 | `GET /api/videos/{id}` | Run record: status, progress, options, timings, error, `summary` |
@@ -115,11 +117,16 @@ The report's `queue.service_rate` section gains `estimator` (`"queue_length_over
 | `GET /api/videos/{id}/waits` | Wait rows |
 | `GET /api/videos/{id}/alerts` | Alert rows |
 | `GET /api/videos/{id}/timeseries` | Per-second rows (same columns as the CLI's `<name>_queue.csv`) |
+| `GET /api/videos/{id}/timeseries.csv` | The time series as the CLI's `<name>_queue.csv` file download (Sprint 7); `404` when not available |
+| `GET /api/videos/{id}/preview.jpg` | Latest head-blurred JPEG of a processing run (Sprint 7); `404` otherwise |
+| `GET /api/videos/{id}/preview.mjpg` | `multipart/x-mixed-replace` stream of preview JPEGs (Sprint 7) |
+| `GET /api/accuracy` | The dashboard's accuracy data (`data/accuracy.json`); `404` until `scripts/export_accuracy.py` has run (Sprint 7) |
 | `GET /api/videos/{id}/report` | The full metrics JSON; `404` until the run has a report |
 | `GET /api/videos/{id}/video` | The annotated H.264 MP4 with HTTP range support (seeking); `404` unless the run is `completed` |
 | `POST /api/videos/{id}/cancel` | Cancels a queued or processing run and returns the run record; `409` if it is not active |
 | `DELETE /api/videos/{id}` | `204`; deletes the database rows, the upload and the outputs; `409` while processing (cancel first) |
-| `GET /` | The test page |
+| `GET /` and any other non-API path | The dashboard's static export (Sprint 7; before that, the test page) |
+| `GET /legacy/` | The Sprint 4 test page (Sprint 7) |
 | `WS /ws/videos/{id}` | Live messages, see below |
 
 ### Upload: `POST /api/videos`
@@ -133,6 +140,7 @@ Multipart form fields:
 | `frame_stride` | no | Integer 1 to 10, default 1 |
 | `blur_heads` | no | Boolean, default `true` (see [privacy.md](privacy.md)) |
 | `max_frames` | no | Integer >= 1; stops after that many processed frames |
+| `realtime` | no | Boolean, default `false` (Sprint 7): pace the run to the clip's own speed, see below |
 
 A wrong extension, an empty file, a file that is not a readable video, a video
 over the duration or frame-size limit, or a bad or unknown camera gives `400`;
@@ -309,6 +317,150 @@ prediction `unknown`, because the engine never guesses (see
 Because `timestamp_s` can be earlier than `detected_s`, order events by
 `timestamp_s` when drawing history.
 
+## Sprint 7 additions
+
+All additions are optional or new routes; existing routes, response shapes,
+WebSocket message types and event schema 1.0 are unchanged. The examples were
+read from a demo API on a real completed run (`cad_seq25`, run id 1, started
+with `realtime` on, 2026-11-12), with long values trimmed.
+
+### A1. `realtime` option
+
+`POST /api/videos` accepts the form field `realtime` (boolean, default
+`false`), stored in the run's `options` JSON; there is no database schema
+change. When true, the job waits inside its per-frame callback until
+`start + video_time` so the run advances at the clip's speed. It never builds
+up lag (when processing is behind, it continues at once), and the wait is
+interrupted by cancel and by server shutdown. Pacing changes no output: waits,
+time series and events are byte-identical to a normal run (see the
+measurements in [testing_report.md](testing_report.md)). `GET /api/videos/{id}`
+returns the option:
+
+```json
+{"video_id": 1, "original_name": "cad_seq25.mp4", "camera_id": "cad_seq25", "status": "completed", "error": null,
+ "options": {"frame_stride": 1, "blur_heads": true, "max_frames": null, "realtime": true},
+ "fps": 30.0, "frames_total": 617, "frames_processed": 617, "percent": 100.0,
+ "created_at": "2026-11-12T07:21:32.080525+00:00", "started_at": "2026-11-12T07:21:32.113715+00:00",
+ "finished_at": "2026-11-12T07:22:02.815638+00:00",
+ "summary": {"camera_id": "cad_seq25", "zone": [[0.06, 0.6], [0.94, 0.6], [0.94, 0.93], [0.06, 0.93]], "...": "..."}}
+```
+
+Runs stored before Sprint 7 have no `realtime` key in `options`; treat it as `false`.
+
+### A2. Live preview
+
+While a run is `processing`, the server keeps the latest preview frame **in
+memory only**: the annotated frame with every detected person's head blurred
+(always, even if the run's `blur_heads` option is off), at most 960 px wide,
+JPEG quality 70, encoded at most 5 times a second. It is dropped when the run
+ends; nothing is written to disk.
+
+* `GET /api/videos/{id}/preview.jpg`: `200`, `Content-Type: image/jpeg`,
+  `Cache-Control: no-store`, the latest frame. `404` with
+  `{"detail": "no preview: run is not processing"}` when the run is not
+  processing (or does not exist: `{"detail": "video 9 not found"}`), and
+  `{"detail": "no preview frame yet"}` before the first frame.
+* `GET /api/videos/{id}/preview.mjpg`: `Content-Type:
+  multipart/x-mixed-replace; boundary=frame`, `Cache-Control: no-store`. Each part is
+  `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: N\r\n\r\n<JPEG>\r\n`.
+  The stream ends when the run ends, the server shuts down or the client disconnects.
+  Same `404` rules as `preview.jpg` for the request that opens it.
+
+Real responses for a finished run and an unknown run (the 200 and the stream
+are described from the code and its tests, not captured):
+
+```
+$ curl -i http://127.0.0.1:8770/api/videos/1/preview.jpg
+HTTP/1.1 404 Not Found
+content-type: application/json
+{"detail":"no preview: run is not processing"}
+
+$ curl -i http://127.0.0.1:8770/api/videos/9/preview.jpg
+HTTP/1.1 404 Not Found
+content-type: application/json
+{"detail":"video 9 not found"}
+```
+
+### Time series as CSV
+
+`GET /api/videos/{id}/timeseries.csv` downloads the run's time series file
+unchanged (same columns as the JSON route). Real response headers and first rows:
+
+```
+HTTP/1.1 200 OK
+content-type: text/csv; charset=utf-8
+accept-ranges: bytes
+content-disposition: attachment; filename="run1_timeseries.csv"
+content-length: 1175
+
+time_s,frame,people_in_frame,raw_queue_count,queue_length,service_rate_per_min,service_rate_status,predicted_wait_s,predicted_wait_low_s,predicted_wait_high_s,prediction_status
+0.000,0,5,0,0,,insufficient_data,,,,unknown
+```
+
+`404` (`time series not available`) for an unknown run or a run without the file.
+
+### A3. `GET /api/accuracy`
+
+Serves `data/accuracy.json`, built by `python scripts/export_accuracy.py` from
+evaluation outputs that exist on disk (`outputs/s6_analysis/`, `outputs/s6_sweep/`,
+`outputs/metrics/*_wait_eval.json`, `datasets/splits/`). Every number is read from
+a source file; a missing source makes its section `null` and adds a
+`missing_sources` entry. `404` with `{"detail": "accuracy data not generated; run
+python scripts/export_accuracy.py"}` if the file is absent; `500`
+(`accuracy data unreadable`) if it is not valid JSON. Top-level keys (schema
+`accuracy-1`): `schema`, `generated_at`, `missing_sources`, `queue_length`,
+`count_errors`, `changes_not_adopted`, `waiting_time`, `limits`. From the demo
+server (trimmed):
+
+```json
+{"schema": "accuracy-1", "generated_at": "2026-11-12T07:21:10.562825+00:00",
+ "missing_sources": [{"section": "waiting_time", "path": "outputs/metrics/*_wait_eval.json", "reason": "not measured yet (session 3)"}],
+ "queue_length": {"source": "...", "protocol": "...", "per_clip": "...", "pooled": {
+   "val":  {"mae": 1.1762, "rmse": 1.4966, "bias": 0.6762, "within_one_rate": 0.7295, "frames": 122, "clips": ["cad_seq10", "cad_seq25", "cad_seq26"]},
+   "test": {"mae": 1.6193, "rmse": 2.0624, "bias": 0.9596, "within_one_rate": 0.5368, "frames": 285, "clips": ["cad_seq27", "cad_seq39", "cad_seq40", "cad_seq41"]}}},
+ "count_errors": {"source": "...", "iou": "...", "window": "...", "per_split": "..."},
+ "changes_not_adopted": "...", "waiting_time": null,
+ "limits": ["Queue length is measured on 3 val and 4 test CAD clips only", "CAD frame rate is assumed to be 30 fps", "..."]}
+```
+
+(`queue_length` also holds `source`, `protocol` and `per_clip`; the dashboard reads the shape through `dashboard/lib/accuracy-types.ts`.) `waiting_time` stays `null` until the
+waiting-time sheets are scored in session 3. Waiting time is never estimated.
+
+### A4. WebSocket Origin check
+
+Before accepting `/ws/videos/{id}`, the server compares the browser's `Origin`
+header with the allowed list: the API's own origin and `http://localhost:3000`
+by default, or `QUEUEVISION_ALLOWED_ORIGINS` (comma-separated, exact
+`scheme://host[:port]`). A connection from another origin is closed before
+`accept` with code 1008 (a real server answers the upgrade with HTTP 403). Requests
+with no `Origin` header (non-browser clients) are allowed. See
+[security_review.md](security_review.md).
+
+### Dashboard and `/legacy`
+
+`GET /` and every other path that is not `/api/*`, `/ws/*` or `/legacy*` is served
+from the dashboard export (`dashboard/out/`, or `QUEUEVISION_DASHBOARD_DIR`): a
+file if it exists, else `<path>.html`, else `<path>/index.html`, else the
+export's `404.html` with status 404. Paths are resolved and must stay inside the
+dashboard folder (traversal and symlink escapes give 404). Unknown `/api/*` and
+`/ws/*` paths give the JSON `{"detail":"Not Found"}`. Only GET and HEAD are
+answered. If the folder does not exist, `/` shows a short page that says
+`Dashboard not built. Run: cd dashboard && npm ci && npm run build` and the API
+routes still work. The Sprint 4 test page moved to `GET /legacy/` (`/legacy`
+redirects with 307).
+
+### New optional `CameraInfo` fields
+
+`GET /api/cameras` entries gain `max_queue_length` (the camera config's
+congestion limit on queue length, or `null`) and `smoothing_window_s` (the
+queue-length smoothing window), so the dashboard can draw the alert limit and
+say "smoothed over 2 s" without computing anything:
+
+```json
+{"id": "cad_seq25", "description": "CAD seq25: cafe counter queue (register on the left). Zone drawn on frames of the clip; 30 fps assumed.",
+ "has_service_point": true, "alerts_enabled": true, "max_queue_length": 8.0, "smoothing_window_s": 2.0, "error": null}
+```
+
 ## Database
 
 SQLite file `data/queuevision.db` (Python's built-in `sqlite3`, WAL mode,
@@ -331,7 +483,6 @@ always scope them by `video_id`.
 
 ## Not in scope
 
-No live cameras, no streaming of annotated frames during processing (the video
-is played afterwards), no authentication or accounts, no HTTPS or deployment,
-and only one job processes at a time. The Next.js dashboard is Sprint 5 and
-will use this API.
+No live cameras, no authentication or accounts, no HTTPS or deployment, and
+only one job processes at a time. The annotated video is played after the run;
+during a run only the head-blurred preview below is available.

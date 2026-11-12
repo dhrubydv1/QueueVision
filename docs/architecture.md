@@ -1,4 +1,4 @@
-# QueueVision Architecture (Sprint 5)
+# QueueVision Architecture (Sprint 5, dashboard added in Sprint 7)
 
 ## Data flow
 
@@ -225,7 +225,8 @@ exit code 1.
 | `api/settings.py` | `ApiSettings`: data dir, camera dir, upload limit, host, port, model, device (environment variables) |
 | `api/db.py` | `sqlite3` schema and repository functions; WAL; foreign keys on; one connection per thread |
 | `api/jobs.py` | `JobManager`, message builders (`progress`, `event`, `status`), live state and subscriber fan-out |
-| `api/main.py` | `create_app(settings, tracker_factory)`; REST routes, WebSocket route, static test page; `app` for uvicorn |
+| `api/main.py` | `create_app(settings, tracker_factory)`; REST routes, WebSocket route (with Origin check), preview routes, accuracy route, `/legacy` test page, dashboard catch-all; `app` for uvicorn |
+| `api/preview.py` | `PreviewStore` (latest head-blurred JPEG per processing run, memory only, at most 5 per second), `render_preview`, `mjpeg_part` |
 | `api/models.py` | Pydantic response models |
 | `api/static/index.html` | Demo test page (plain HTML/CSS/JS, no build step, no CDN) |
 | `api/__main__.py` | `python -m api` |
@@ -247,6 +248,67 @@ keeping the partial results.
 **SQLite tables** (`data/queuevision.db`): `schema_meta`, `videos`, `events`,
 `waits`, `alerts` and `timeseries`; the last four reference `videos` with
 `ON DELETE CASCADE`. Columns are listed in [api.md](api.md).
+
+## Dashboard, serving and live preview (Sprint 7)
+
+```
+ browser ──► FastAPI (127.0.0.1:8000)
+   │            ├─ /api/*, /ws/videos/{id}      existing routes, plus preview.jpg / preview.mjpg,
+   │            │                               timeseries.csv, /api/accuracy
+   │            ├─ /legacy/                     the Sprint 4 test page (api/static)
+   │            └─ /{path}  catch-all (last)    dashboard/out/ static export
+   └─ development only: next dev :3000 ── /api/* rewrite ──► :8000 ; WebSocket and media connect to :8000 directly
+```
+
+**Dashboard (`dashboard/`).** Next.js App Router with `output: 'export'`, so
+`next build` writes plain files to `dashboard/out/`. Run and report ids are query
+parameters (`/live?id=12`, `/run?id=12`) because a static export cannot
+pre-render unknown ids. Fonts come from `next/font` and are bundled; nothing is
+loaded from a CDN at run time. TanStack Query fetches REST data through the typed
+client in `lib/api.ts` (types generated from the committed `dashboard/openapi.json`);
+`lib/useLiveSocket.ts` owns the WebSocket (reconnect with 1, 2, 4, 8, 15 s
+backoff, applies the `snapshot` message on every connect, marks the data stale
+after 5 s of silence). `lib/live-types.ts` and `lib/accuracy-types.ts` are
+hand-written message and file shapes. Design tokens are Tailwind theme variables in
+`app/globals.css`. The browser only formats and draws; every number comes from
+the API, and `Unknown` / `Insufficient data` are shown as the engine reports them.
+
+**Serving (`api/main.py`).** The routes are registered in this order: API and
+WebSocket routes, `/legacy` (static mount plus a redirect from `/legacy`), then a
+catch-all `GET`/`HEAD` route for the dashboard. The catch-all returns a file under
+`dashboard/out/` if it exists, else `<path>.html`, else `<path>/index.html`, else
+`404.html` with status 404; unknown `/api/*` and `/ws/*` paths get the JSON 404.
+Every candidate is resolved and must be inside the dashboard folder (symlink and
+`..` escapes give 404). With no `dashboard/out/`, `/` shows a "Dashboard not built"
+page and everything else keeps working. `scripts/demo.sh` builds the dashboard,
+exports accuracy data and starts the API.
+
+**Live preview data flow.**
+
+```
+ engine frame ──► process_video(frame_callback_wants_image=True)
+      │              FrameUpdate.image (the drawn frame) and FrameUpdate.people (boxes), only when asked
+      ▼
+ JobManager.on_frame ──► PreviewStore.offer(video_id, image, people)      (worker thread)
+      │                    at most one frame per 0.2 s: copy, blur heads (privacy.py),
+      │                    downscale to <= 960 px wide, JPEG quality 70; latest only, in memory
+      ▼
+ GET preview.jpg  (latest JPEG)        GET preview.mjpg  (multipart/x-mixed-replace, polls the store every 0.1 s,
+                                                          ends when the store is dropped, the server stops or the client leaves)
+```
+
+`FrameUpdate.image` and `.people` default to `None` and are set only when the
+caller passes `frame_callback_wants_image=True`; the CLI never does, so its work
+and output files are unchanged (a test compares them). The preview is blurred
+on a copy even when the run's `blur_heads` option is off, is never written to disk
+and is dropped when the run ends. Real-time pacing (`realtime` option) lives in the
+same `on_frame` handler: it waits on an event until `start + video_time` and never
+accumulates lag.
+
+**WebSocket Origin check.** `live()` compares the `Origin` header with
+`ApiSettings.effective_allowed_origins()` before `accept` and closes with 1008 on
+a mismatch; a missing header is allowed. The dashboard's dev origin
+`http://localhost:3000` is in the default list.
 
 ## Sprint 5 additions
 
@@ -374,9 +436,8 @@ config  ◄── detection/types ◄── queue/*  ◄── pipeline ◄─�
   For a live source, events are emitted as the video proceeds, but
   `timestamp_s` can be earlier than `detected_s`, so order by `timestamp_s`
   for history and by arrival for a live feed.
-* **Dashboard (Sprint 5):** reads the stored events, waits, alerts and time
-  series; the wait statistics in the metrics JSON `queue.waiting` section show
-  what to aggregate.
+* **Dashboard (Sprint 7, done; see above):** reads the stored events, waits,
+  alerts and time series through the API.
 * **Model comparison / speed:** `--model yolo11s.pt`, CoreML via
   `export_model.py`, `--frame-stride`. The report records model, device and
   resolved tracker settings.
