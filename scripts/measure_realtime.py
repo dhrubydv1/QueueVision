@@ -90,12 +90,12 @@ def main(argv: list[str] | None = None) -> int:
 
     waits: list[float] = []  # seconds actually spent in each real-time pacing wait
 
-    def run_pair(settings, manager, stride: int, note: str) -> dict:
+    def run_pair(settings, manager, stride: int, first: bool) -> dict:
         waits.clear()
         fast = run_job(settings, manager, args.video, args.camera, realtime=False, stride=stride)
         waits.clear()
         paced = run_job(settings, manager, args.video, args.camera, realtime=True, stride=stride)
-        pacing = {"wait_calls": len(waits), "total_waited_s": round(sum(waits), 3)}
+        calls, waited = len(waits), sum(waits)
         equal = {}
         for name, pattern in COMPARED.items():
             a = output_file(settings, fast["video_id"], pattern).read_bytes()
@@ -103,23 +103,41 @@ def main(argv: list[str] | None = None) -> int:
             equal[name] = {"byte_equal": a == b, "bytes": len(a)}
         reports = {k: v["record"]["report"] for k, v in (("fast", fast), ("paced", paced))}
         frames = reports["paced"]["frames_processed"]
-        overhead = paced["wall_s"] - duration
+        fast_fps = reports["fast"]["performance"]["average_processing_fps"]
+        paced_fps = reports["paced"]["performance"]["average_processing_fps"]
+        gap = paced["wall_s"] - duration
+        note = (
+            f"Real-time run: {calls} pacing waits, {waited:.3f} s waited in total; real-time wall "
+            f"{paced['wall_s']:.3f} s vs clip {duration:.3f} s ({gap:+.3f} s); normal run "
+            f"{fast['wall_s']:.3f} s. Processing fps from the reports: normal {fast_fps}, real time "
+            f"{paced_fps}."
+        )
+        if calls == 0:
+            note += " The pacer never waited, so this pair does not exercise pacing."
+        else:
+            extra = paced["wall_s"] - waited - fast["wall_s"]
+            note += (
+                f" Real-time wall minus time waited is {paced['wall_s'] - waited:.3f} s against "
+                f"{fast['wall_s']:.3f} s for the normal run; the {extra:+.3f} s "
+                "difference is not explained by the wait counter (cause not measured)."
+            )
+        if first:
+            note += (
+                " The normal run is the first user of the detector, so its wall time includes the model load."
+            )
         return {
             "frame_stride": stride,
             "note": note,
             "frames_processed": {k: r["frames_processed"] for k, r in reports.items()},
-            "normal_run": {
-                "wall_s": round(fast["wall_s"], 3),
-                "report_processing_fps": reports["fast"]["performance"]["average_processing_fps"],
-            },
-            "realtime_run": {
-                "wall_s": round(paced["wall_s"], 3),
-                "report_processing_fps": reports["paced"]["performance"]["average_processing_fps"],
-                **pacing,
-            },
-            "realtime_wall_minus_clip_duration_s": round(overhead, 3),
-            "per_frame_overhead_ms": round(1000 * overhead / frames, 3) if overhead > 0 and frames else None,
-            "pacing_exercised": pacing["wait_calls"] > 0,
+            "fast_wall_s": round(fast["wall_s"], 3),
+            "realtime_wall_s": round(paced["wall_s"], 3),
+            "non_wait_s": round(paced["wall_s"] - waited, 3),
+            "wait_calls": calls,
+            "total_waited_s": round(waited, 3),
+            "report_processing_fps": {"normal": fast_fps, "realtime": paced_fps},
+            "realtime_wall_minus_clip_duration_s": round(gap, 3),
+            "realtime_wall_minus_clip_per_frame_ms": round(1000 * gap / frames, 3) if frames else None,
+            "pacing_exercised": calls > 0,
             "outputs_identical": equal,
             "all_outputs_identical": all(v["byte_equal"] for v in equal.values()),
         }
@@ -143,21 +161,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             # Both runs of the first pair share one loaded detector and the normal run is its
             # first user, so that wall time includes the model load.
-            stride1 = run_pair(
-                settings,
-                manager,
-                1,
-                "Processing (about 25.5 fps) is slower than the clip (30 fps), so the real-time run "
-                "never waits: its wall-minus-duration is the processing shortfall, not a pacing cost. "
-                "This pair does not exercise pacing. Normal-run wall time includes the model load.",
-            )
-            stride3 = run_pair(
-                settings,
-                manager,
-                3,
-                "Every 3rd frame (about 10 video fps processed): processing outruns the clip, so the "
-                "pacer waits. This pair exercises pacing.",
-            )
+            stride1 = run_pair(settings, manager, 1, first=True)
+            stride3 = run_pair(settings, manager, 3, first=False)
         finally:
             manager.stop()
 
