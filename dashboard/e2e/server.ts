@@ -27,6 +27,13 @@ export class ApiServer {
 
   async start(): Promise<void> {
     if (this.child) throw new Error("server already running");
+    const stale = await fetch(`${BASE_URL}/api/health`).then(
+      (res) => res.ok,
+      () => false,
+    );
+    if (stale) {
+      throw new Error(`Port ${PORT} already answers /api/health (a stale server?). Stop it and rerun the e2e tests.`);
+    }
     const child = spawn(PYTHON, ["-m", "api"], {
       cwd: REPO_ROOT,
       stdio: "ignore",

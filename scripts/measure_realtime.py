@@ -31,11 +31,13 @@ from api.settings import ApiSettings  # noqa: E402
 COMPARED = {"waits": "*_waits.csv", "timeseries": "*_queue.csv", "events": "*_events.jsonl"}
 
 
-def run_job(settings: ApiSettings, manager: JobManager, source: Path, camera: str, realtime: bool) -> dict:
+def run_job(
+    settings: ApiSettings, manager: JobManager, source: Path, camera: str, realtime: bool, stride: int
+) -> dict:
     """Create one run in the uploads layout the API uses, process it, return timing and record."""
     conn = db.connect(settings.db_path)
     try:
-        options = {"frame_stride": 1, "blur_heads": True, "max_frames": None, "realtime": realtime}
+        options = {"frame_stride": stride, "blur_heads": True, "max_frames": None, "realtime": realtime}
         video_id = db.create_video(conn, source.name, camera, options)
         folder = settings.uploads_dir / str(video_id)
         folder.mkdir(parents=True, exist_ok=True)
@@ -86,22 +88,14 @@ def main(argv: list[str] | None = None) -> int:
     capture.release()
     duration = count / fps
 
-    with tempfile.TemporaryDirectory(prefix="qv_realtime_") as tmp:
-        settings = ApiSettings(data_dir=Path(tmp), camera_dir=PROJECT_ROOT / "configs" / "cameras")
-        settings.data_dir.mkdir(parents=True, exist_ok=True)
-        conn = db.connect(settings.db_path)
-        db.init_db(conn)
-        conn.close()
-        manager = JobManager(settings, default_tracker_factory(settings))
-        manager.start()
-        try:
-            # Untimed pass would hide model load from run 1; instead both runs share one loaded
-            # detector and run 1 is the first user, so its wall time includes the model load.
-            fast = run_job(settings, manager, args.video, args.camera, realtime=False)
-            paced = run_job(settings, manager, args.video, args.camera, realtime=True)
-        finally:
-            manager.stop()
+    waits: list[float] = []  # seconds actually spent in each real-time pacing wait
 
+    def run_pair(settings, manager, stride: int, note: str) -> dict:
+        waits.clear()
+        fast = run_job(settings, manager, args.video, args.camera, realtime=False, stride=stride)
+        waits.clear()
+        paced = run_job(settings, manager, args.video, args.camera, realtime=True, stride=stride)
+        pacing = {"wait_calls": len(waits), "total_waited_s": round(sum(waits), 3)}
         equal = {}
         for name, pattern in COMPARED.items():
             a = output_file(settings, fast["video_id"], pattern).read_bytes()
@@ -110,6 +104,63 @@ def main(argv: list[str] | None = None) -> int:
         reports = {k: v["record"]["report"] for k, v in (("fast", fast), ("paced", paced))}
         frames = reports["paced"]["frames_processed"]
         overhead = paced["wall_s"] - duration
+        return {
+            "frame_stride": stride,
+            "note": note,
+            "frames_processed": {k: r["frames_processed"] for k, r in reports.items()},
+            "normal_run": {
+                "wall_s": round(fast["wall_s"], 3),
+                "report_processing_fps": reports["fast"]["performance"]["average_processing_fps"],
+            },
+            "realtime_run": {
+                "wall_s": round(paced["wall_s"], 3),
+                "report_processing_fps": reports["paced"]["performance"]["average_processing_fps"],
+                **pacing,
+            },
+            "realtime_wall_minus_clip_duration_s": round(overhead, 3),
+            "per_frame_overhead_ms": round(1000 * overhead / frames, 3) if overhead > 0 and frames else None,
+            "pacing_exercised": pacing["wait_calls"] > 0,
+            "outputs_identical": equal,
+            "all_outputs_identical": all(v["byte_equal"] for v in equal.values()),
+        }
+
+    with tempfile.TemporaryDirectory(prefix="qv_realtime_") as tmp:
+        settings = ApiSettings(data_dir=Path(tmp), camera_dir=PROJECT_ROOT / "configs" / "cameras")
+        settings.data_dir.mkdir(parents=True, exist_ok=True)
+        conn = db.connect(settings.db_path)
+        db.init_db(conn)
+        conn.close()
+
+        def counting_wait(delay: float) -> object:
+            """The manager's real interruptible Event wait, with the time it blocked recorded."""
+            began = time.monotonic()
+            result = manager._interrupt.wait(delay)
+            waits.append(time.monotonic() - began)
+            return result
+
+        manager = JobManager(settings, default_tracker_factory(settings), wait=counting_wait)
+        manager.start()
+        try:
+            # Both runs of the first pair share one loaded detector and the normal run is its
+            # first user, so that wall time includes the model load.
+            stride1 = run_pair(
+                settings,
+                manager,
+                1,
+                "Processing (about 25.5 fps) is slower than the clip (30 fps), so the real-time run "
+                "never waits: its wall-minus-duration is the processing shortfall, not a pacing cost. "
+                "This pair does not exercise pacing. Normal-run wall time includes the model load.",
+            )
+            stride3 = run_pair(
+                settings,
+                manager,
+                3,
+                "Every 3rd frame (about 10 video fps processed): processing outruns the clip, so the "
+                "pacer waits. This pair exercises pacing.",
+            )
+        finally:
+            manager.stop()
+
         summary = {
             "video": args.video.name,
             "camera": args.camera,
@@ -117,27 +168,8 @@ def main(argv: list[str] | None = None) -> int:
             "clip_fps": round(fps, 3),
             "clip_frames": count,
             "clip_duration_s": round(duration, 3),
-            "frames_processed": {k: r["frames_processed"] for k, r in reports.items()},
-            "normal_run": {
-                "wall_s": round(fast["wall_s"], 3),
-                "includes_model_load": True,
-                "report_processing_fps": reports["fast"]["performance"]["average_processing_fps"],
-            },
-            "realtime_run": {
-                "wall_s": round(paced["wall_s"], 3),
-                "report_processing_fps": reports["paced"]["performance"]["average_processing_fps"],
-            },
-            "realtime_wall_minus_clip_duration_s": round(overhead, 3),
-            "per_frame_overhead_ms": round(1000 * overhead / frames, 3) if overhead > 0 and frames else None,
-            "per_frame_overhead_note": (
-                "null when the real-time wall time did not exceed the clip duration. Pacing only waits "
-                "when processing is faster than the clip; when it is slower (processing fps below clip "
-                "fps) the real-time run never waits, so this overhead is the processing shortfall, "
-                "not a cost of pacing."
-            ),
-            "processing_faster_than_clip": reports["paced"]["performance"]["average_processing_fps"] > fps,
-            "outputs_identical": equal,
-            "all_outputs_identical": all(v["byte_equal"] for v in equal.values()),
+            "pairs": {"stride_1": stride1, "stride_3": stride3},
+            "all_outputs_identical": stride1["all_outputs_identical"] and stride3["all_outputs_identical"],
         }
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
