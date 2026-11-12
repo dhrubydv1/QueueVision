@@ -96,7 +96,7 @@ Final counts after this wave: 440 passed (full), 429 passed / 11 deselected (not
 * `next/font/google` downloads the font files at **build** time (CI build needs network); nothing loads from a CDN at run time.
 * Mid-run API crash: the Live page shows Offline and recovers without reload. A graceful stop ends the run `cancelled`; a crash leaves it `failed` after restart.
 * Real-time pacing: the unexplained stride-3 gap (section 5). `JobManager.stop()` sets its interrupt outside the condition lock, so a lost interrupt could delay shutdown by up to one frame interval (no test for the stop wait).
-* Preview: an exception in `PreviewStore.offer` would fail the whole run (should be wrapped and logged); a test assumes a whole MJPEG part arrives in the first chunk. Heads are blurred from the detector's boxes, so a missed person is not blurred.
+* Preview: a test assumes a whole MJPEG part arrives in the first chunk. Heads are blurred from the detector's boxes, so a missed person is not blurred.
 * Origin check: no tests for `Origin: ""`/`null` or an env value of only commas; an IPv6 own-origin lacks brackets; configured origins are not lower-cased; a real server answers the pre-accept close with HTTP 403 rather than a 1008 frame.
 * Dashboard serving: `/legacy` redirect drops the query string; `HEAD /legacy` falls to the catch-all; HTML is served without `no-cache`.
 * `next-env.d.ts` is gitignored but in the tsconfig `include`; `npm run typecheck` before any build on a fresh checkout is the thing to watch.

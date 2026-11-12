@@ -34,7 +34,7 @@ Vitest covers `WaitCard` (value and range, Unknown, Insufficient data), `StaleBa
 `useLiveSocket` (reconnect backoff and snapshot with a fake WebSocket), the API client,
 formatting (including "NPT"), the Live, Run and Accuracy views and the accuracy card.
 Not unit-tested: `QueueChart` geometry, `PreviewPanel` layout, `UploadForm`, `RunsTable`,
-`WaitsTable`, the Overview page itself (checked in the browser instead).
+`WaitsTable` (checked in the browser instead). The Overview page has only a pre-load test (`app/page.test.tsx`).
 
 CI: a `dashboard` job (Node 22: `npm ci`, generated-types staleness check, lint,
 typecheck, Vitest, build) and an OpenAPI staleness step in `lint-and-unit` were added to
