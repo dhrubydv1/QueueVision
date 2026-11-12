@@ -37,7 +37,7 @@ function LiveEntry() {
   if (runs.isError) {
     return <main className="mx-auto max-w-content p-6"><EmptyState title="Cannot load runs">{runs.error.message}</EmptyState></main>;
   }
-  return null;
+  return <main className="mx-auto max-w-content p-6"><p className="text-sm text-text-2">Loading…</p></main>;
 }
 
 export default function LivePage() {

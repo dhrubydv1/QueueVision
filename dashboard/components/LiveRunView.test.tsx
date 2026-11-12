@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LiveSocket } from "@/lib/useLiveSocket";
@@ -93,5 +93,31 @@ describe("LiveRunView", () => {
     const items = await screen.findAllByRole("listitem");
     const texts = items.map((i) => i.textContent);
     expect(texts.findIndex((t) => t?.includes("Service started"))).toBeLessThan(texts.findIndex((t) => t?.includes("Joined the queue")));
+  });
+
+  it("refetches history after a close then open, not on the first open", async () => {
+    setSocket();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const ui = () => <QueryClientProvider client={qc}><LiveRunView videoId={7} /></QueryClientProvider>;
+    const { rerender } = render(ui());
+    await waitFor(() => expect(api.getTimeseries).toHaveBeenCalledTimes(1));
+    setSocket({ connectionState: "closed" });
+    rerender(ui());
+    setSocket({ connectionState: "open" });
+    rerender(ui());
+    await waitFor(() => expect(api.getTimeseries).toHaveBeenCalledTimes(2));
+  });
+
+  it("first connect shows no Offline chip; cancel stays disabled after success", async () => {
+    setSocket({ connectionState: "connecting", lastMessageAt: null, progress: null });
+    view();
+    expect(screen.queryByText("Offline")).not.toBeInTheDocument();
+    cleanup();
+    setSocket();
+    vi.mocked(api.cancelRun).mockResolvedValue({} as never);
+    view();
+    const btn = await screen.findByRole("button", { name: "Cancel run" });
+    await userEvent.click(btn);
+    await waitFor(() => expect(btn).toBeDisabled());
   });
 });

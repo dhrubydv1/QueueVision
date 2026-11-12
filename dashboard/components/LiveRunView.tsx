@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ApiError, cancelRun, getCameras, getTimeseries } from "@/lib/api";
 import { formatClock, formatNumber } from "@/lib/format";
 import { FINAL_STATUSES } from "@/lib/live-types";
@@ -26,6 +26,20 @@ export function LiveRunView({ videoId }: Readonly<{ videoId: number }>) {
   const history = useQuery({
     queryKey: ["timeseries", videoId], queryFn: () => getTimeseries(videoId), staleTime: Infinity, refetchOnWindowFocus: false,
   });
+
+  // After a drop, refetch the history on the next open so the chart has no permanent gap.
+  const refetchHistory = history.refetch;
+  const link = useRef<{ opened: boolean; dropped: boolean }>({ opened: false, dropped: false });
+  useEffect(() => {
+    const l = link.current;
+    if (connectionState === "open") {
+      if (l.opened && l.dropped) void refetchHistory();
+      l.opened = true;
+      l.dropped = false;
+    } else if (l.opened) {
+      l.dropped = true;
+    }
+  }, [connectionState, refetchHistory]);
 
   // Display buffer of received values (no statistics), appended during render when a new message arrives.
   const [live, setLive] = useState<QueuePoint[]>([]);
@@ -55,6 +69,7 @@ export function LiveRunView({ videoId }: Readonly<{ videoId: number }>) {
   // false on the server and during hydration, true afterwards (clock text depends on the browser's zone).
   const mounted = useSyncExternalStore(() => () => {}, () => true, () => false);
   const [cancelling, setCancelling] = useState(false);
+  const [cancelRequested, setCancelRequested] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
 
   if (connectionState === "not_found") {
@@ -77,7 +92,8 @@ export function LiveRunView({ videoId }: Readonly<{ videoId: number }>) {
 
   let chip: Status;
   if (isFinal) chip = runStatus as Status;
-  else if (connectionState !== "open") chip = "offline";
+  else if (offline) chip = "offline";
+  else if (connectionState !== "open") chip = "processing"; // neutral while the first connection is made
   else chip = alertActive ? "congested" : "live";
 
   const rate = progress?.service_rate_per_min ?? null;
@@ -89,6 +105,7 @@ export function LiveRunView({ videoId }: Readonly<{ videoId: number }>) {
     setCancelError(null);
     try {
       await cancelRun(videoId);
+      setCancelRequested(true); // stays disabled until the socket reports a final status
     } catch (e) {
       setCancelError(e instanceof ApiError ? e.message : "Cancel failed");
     } finally {
@@ -111,7 +128,7 @@ export function LiveRunView({ videoId }: Readonly<{ videoId: number }>) {
         <div className="flex flex-col items-end gap-1">
           <button
             type="button"
-            disabled={!isProcessing || cancelling}
+            disabled={!isProcessing || cancelling || cancelRequested}
             onClick={onCancel}
             className="h-10 rounded-control border border-border bg-surface px-4 text-sm font-medium text-text disabled:opacity-50"
           >
