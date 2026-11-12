@@ -9,6 +9,7 @@ import logging
 from api.settings import ApiSettings, SettingsError
 
 LOGGER = logging.getLogger("queuevision.api")
+GRACEFUL_SHUTDOWN_S = 5  # open MJPEG streams must not block Ctrl+C until the video ends
 
 
 def is_loopback(host: str) -> bool:
@@ -50,7 +51,13 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO)
     warn_if_exposed(args.host)
 
-    uvicorn.run("api.main:app", host=args.host, port=args.port, reload=args.reload)
+    uvicorn.run(
+        "api.main:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S,
+    )
 
 
 if __name__ == "__main__":

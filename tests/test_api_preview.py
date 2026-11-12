@@ -133,26 +133,71 @@ def test_mjpeg_ends_when_run_ends(settings, clip) -> None:  # noqa: F811
         assert client.get(f"/api/videos/{video_id}/preview.jpg").status_code == 404
 
 
+def test_mjpeg_ends_when_server_stops(settings, clip) -> None:  # noqa: F811
+    reached, release = threading.Event(), threading.Event()
+    with make_client(settings, lambda: GatedTracker(reached, release, block_at=3)) as client:
+        jobs = client.app.state.jobs
+        video_id = upload(client, clip).json()["video_id"]
+        assert reached.wait(WAIT)
+        try:
+            with client.stream("GET", f"/api/videos/{video_id}/preview.mjpg") as response:
+                iterator = response.iter_bytes()
+                assert next(iterator)
+                done = threading.Event()
+
+                def drain() -> None:
+                    for _ in iterator:
+                        pass
+                    done.set()
+
+                threading.Thread(target=drain, daemon=True).start()
+                jobs._stop.set()  # what jobs.stop() does first; the gated run is still blocked
+                assert jobs.stopping
+                assert done.wait(3.0), "stream did not end when the job manager was stopping"
+        finally:
+            release.set()
+
+
+def test_main_sets_graceful_shutdown_timeout(monkeypatch) -> None:
+    import uvicorn
+
+    from api.__main__ import main
+
+    captured: dict = {}
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: captured.update(kwargs))
+    main(["--port", "8123"])
+    assert captured["timeout_graceful_shutdown"] == 5
+
+
 def test_preview_blurred_even_when_blur_off(settings, clip, monkeypatch) -> None:  # noqa: F811
-    seen: list[tuple[np.ndarray, np.ndarray]] = []
+    seen: list[np.ndarray] = []
     real = preview_module.render_preview
 
     def spy(image, people):
-        out = real(image, people)
-        seen.append((image.copy(), out))
-        return out
+        seen.append(image.copy())
+        return real(image, people)
 
     monkeypatch.setattr(preview_module, "render_preview", spy)
     reached, release = threading.Event(), threading.Event()
     with make_client(settings, lambda: GatedTracker(reached, release, block_at=3)) as client:
+        jobs = client.app.state.jobs
         video_id = upload(client, clip, blur_heads="false").json()["video_id"]
         assert reached.wait(WAIT)
         wait_for_preview(client, video_id)
+        latest = jobs.preview.latest(video_id)
         release.set()
         wait_status(client, video_id)
-    raw, rendered = seen[0]
-    assert raw.shape == rendered.shape
-    assert not np.array_equal(raw[30:46, 120:160], rendered[30:46, 120:160])  # the head box is blurred
+    raw = seen[latest[0] - 1]  # the spy runs once per encode: input of the stored frame
+    stored = cv2.imdecode(np.frombuffer(latest[1], np.uint8), cv2.IMREAD_COLOR)
+    assert stored.shape == raw.shape
+    # the input head box (frame 0 person at x 120..160, y 30..46) is still sharp: the box outline
+    # drawn on the annotated frame gives it strong edges
+    head = (slice(30, 46), slice(120, 160))
+    assert np.abs(np.diff(raw[head].astype(int), axis=1)).max() > 60
+    _ok, buffer = cv2.imencode(".jpg", raw, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    unblurred = cv2.imdecode(buffer, cv2.IMREAD_COLOR)  # what the same JPEG would show without blur
+    diff = np.abs(stored.astype(int) - unblurred.astype(int))
+    assert diff[head].mean() > 2.0  # the head region differs from the sharp input
     outside = np.ones(raw.shape[:2], dtype=bool)
-    outside[30:46, 120:160] = False
-    assert np.array_equal(raw[outside], rendered[outside])
+    outside[head] = False
+    assert diff[outside].mean() < 0.5  # rest of the frame matches an unblurred encode

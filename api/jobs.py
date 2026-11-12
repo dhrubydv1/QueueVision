@@ -245,6 +245,11 @@ class JobManager:
                 self._publish(video_id, status_message(video_id, record))
         return True
 
+    @property
+    def stopping(self) -> bool:
+        """True once ``stop()`` was called."""
+        return self._stop.is_set()
+
     def is_active(self, video_id: int) -> bool:
         with self._cond:
             return self._current == video_id or video_id in self._pending

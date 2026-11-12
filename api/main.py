@@ -314,7 +314,7 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
                     last = current[0]
                     yield mjpeg_part(current[1])
                 await asyncio.sleep(MJPEG_POLL_S)
-                if await request.is_disconnected():
+                if jobs.stopping or await request.is_disconnected():
                     return
                 current = jobs.preview.latest(video_id)
                 if current is None:  # the run ended: the store is dropped when processing stops
