@@ -64,9 +64,13 @@ function Swatch({ color, text }: Readonly<{ color: string; text: string }>) {
 function ClipSection({ data }: Readonly<{ data: AccuracyData }>) {
   const ql = data.queue_length;
   if (!ql) return <Unavailable text={unavailable(data.missing_sources, "queue_length")} />;
-  const bars: BarDatum[] = ql.per_clip.map((c) => ({
-    name: c.clip, value: Number(formatNumber(c.mae, 2)),
-    fill: c.split === "val" ? "var(--color-bar-val)" : "var(--color-bar-test)",
+  const rank = (c: { split: "val" | "test" | null }) => (c.split === "val" ? 0 : c.split === "test" ? 1 : 2);
+  const clips = [...ql.per_clip].sort((a, b) => rank(a) - rank(b) || a.clip.localeCompare(b.clip));
+  const hasUnassigned = clips.some((c) => c.split === null);
+  const fillFor = (split: "val" | "test" | null) =>
+    split === "val" ? "var(--color-bar-val)" : split === "test" ? "var(--color-bar-test)" : "var(--color-text-3)";
+  const bars: BarDatum[] = clips.map((c) => ({
+    name: c.clip, value: Number(formatNumber(c.mae, 2)), fill: fillFor(c.split),
     detail: `${c.split ? SPLIT_WORD[c.split] : "Unassigned"} split`,
   }));
   return (
@@ -74,13 +78,14 @@ function ClipSection({ data }: Readonly<{ data: AccuracyData }>) {
       <div className="mb-2 flex flex-wrap gap-4">
         <Swatch color="var(--color-bar-val)" text="Validation (tuning) clips" />
         <Swatch color="var(--color-bar-test)" text="Test (held-out) clips" />
+        {hasUnassigned ? <Swatch color="var(--color-text-3)" text="Unassigned clips" /> : null}
       </div>
       <HBars data={bars} label="Mean absolute error by clip, in people" unit="people" />
       <table data-testid="clip-bars-data" className="sr-only">
         <caption>Mean absolute error by clip (people)</caption>
         <thead><tr><th>Clip</th><th>Split</th><th>Mean absolute error (people)</th><th>Frames</th></tr></thead>
         <tbody>
-          {ql.per_clip.map((c) => (
+          {clips.map((c) => (
             <tr key={c.clip}>
               <td>{c.clip}</td><td>{c.split ? SPLIT_WORD[c.split] : "Unassigned"}</td>
               <td>{formatNumber(c.mae, 2)}</td><td>{c.frames}</td>
@@ -185,7 +190,7 @@ export function AccuracyView({ data, error }: Readonly<{ data: AccuracyData | un
   if (error) {
     return <EmptyState title={error instanceof ApiError && error.status === 404 ? NOT_GENERATED : error.message} />;
   }
-  if (!data) return <p className="text-sm text-text-3">Loading</p>;
+  if (!data) return <p className="text-sm text-text-3">Loading…</p>;
   const t = data.queue_length?.pooled.test;
   return (
     <div className="flex flex-col gap-6">

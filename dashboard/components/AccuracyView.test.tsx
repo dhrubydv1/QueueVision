@@ -50,6 +50,23 @@ describe("AccuracyView", () => {
     expect(screen.getByText("Validation (tuning) clips")).toBeInTheDocument();
     expect(screen.getByText("Test (held-out) clips")).toBeInTheDocument();
   });
+  it("orders clips val, test, unassigned and labels unassigned clips", () => {
+    const d = { ...data, queue_length: { ...data.queue_length!, per_clip: [
+      { clip: "z", split: null, mae: 1, rmse: 1, bias: 0, within_one_rate: 0.5, frames: 1 },
+      { clip: "b", split: "test", mae: 1, rmse: 1, bias: 0, within_one_rate: 0.5, frames: 1 },
+      { clip: "a", split: "test", mae: 1, rmse: 1, bias: 0, within_one_rate: 0.5, frames: 1 },
+      { clip: "m", split: "val", mae: 1, rmse: 1, bias: 0, within_one_rate: 0.5, frames: 1 },
+    ] } } as AccuracyData;
+    render(<AccuracyView data={d} error={null} />);
+    const rows = within(screen.getByTestId("clip-bars-data")).getAllByRole("row").slice(1);
+    expect(rows.map((r) => r.firstChild?.textContent)).toEqual(["m", "a", "b", "z"]);
+    expect(rows[3]).toHaveTextContent("Unassigned");
+    expect(screen.getByText("Unassigned clips")).toBeInTheDocument();
+  });
+  it("omits the unassigned legend entry when every clip has a split", () => {
+    render(<AccuracyView data={data} error={null} />);
+    expect(screen.queryByText("Unassigned clips")).toBeNull();
+  });
   it("shows test count errors by default and switches split", () => {
     render(<AccuracyView data={data} error={null} />);
     const list = () => screen.getByTestId("count-bars-data");
