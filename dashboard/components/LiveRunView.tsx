@@ -3,9 +3,9 @@
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ApiError, cancelRun, getCameras, getTimeseries } from "@/lib/api";
+import { ApiError, cancelRun, getCameras, getEvents, getTimeseries } from "@/lib/api";
 import { formatClock, formatNumber } from "@/lib/format";
-import { FINAL_STATUSES } from "@/lib/live-types";
+import { FINAL_STATUSES, eventKey } from "@/lib/live-types";
 import { useLiveSocket } from "@/lib/useLiveSocket";
 import { AlertBanner } from "./AlertBanner";
 import { EmptyState } from "./EmptyState";
@@ -27,19 +27,40 @@ export function LiveRunView({ videoId }: Readonly<{ videoId: number }>) {
     queryKey: ["timeseries", videoId], queryFn: () => getTimeseries(videoId), staleTime: Infinity, refetchOnWindowFocus: false,
   });
 
-  // After a drop, refetch the history on the next open so the chart has no permanent gap.
+  // Recorded events: the socket sends none for a run that already finished.
+  const eventHistory = useQuery({
+    queryKey: ["events", videoId], queryFn: () => getEvents(videoId), staleTime: Infinity, refetchOnWindowFocus: false,
+  });
+
+  // After a drop, refetch the history on the next open so the chart and feed have no permanent gap.
   const refetchHistory = history.refetch;
+  const refetchEvents = eventHistory.refetch;
   const link = useRef<{ opened: boolean; dropped: boolean }>({ opened: false, dropped: false });
   useEffect(() => {
     const l = link.current;
     if (connectionState === "open") {
-      if (l.opened && l.dropped) void refetchHistory();
+      if (l.opened && l.dropped) {
+        void refetchHistory();
+        void refetchEvents();
+      }
       l.opened = true;
       l.dropped = false;
     } else if (l.opened) {
       l.dropped = true;
     }
-  }, [connectionState, refetchHistory]);
+  }, [connectionState, refetchHistory, refetchEvents]);
+
+  // History first, then socket events not already in it; newest first by timestamp_s, ties newest arrival first.
+  const feed = useMemo(() => {
+    const seenKeys = new Set<string>();
+    const merged = [...(eventHistory.data ?? []), ...events].filter((e) => {
+      const key = eventKey(e);
+      if (seenKeys.has(key)) return false;
+      seenKeys.add(key);
+      return true;
+    });
+    return merged.reverse().sort((a, b) => b.timestamp_s - a.timestamp_s);
+  }, [eventHistory.data, events]);
 
   // Display buffer of received values (no statistics), appended during render when a new message arrives.
   const [live, setLive] = useState<QueuePoint[]>([]);
@@ -178,7 +199,7 @@ export function LiveRunView({ videoId }: Readonly<{ videoId: number }>) {
 
       <section aria-label="Events" className="rounded-card border border-border bg-surface p-5">
         <h2 className="text-[13px] font-medium text-text-2">Events</h2>
-        <EventFeed events={[...events].reverse()} />
+        <EventFeed events={feed} />
       </section>
     </main>
   );

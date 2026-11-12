@@ -9,6 +9,7 @@ vi.mock("@/lib/useLiveSocket", () => ({ useLiveSocket: () => socket.value }));
 vi.mock("@/lib/api", async (orig) => ({
   ...(await orig<typeof import("@/lib/api")>()),
   getTimeseries: vi.fn().mockResolvedValue([]),
+  getEvents: vi.fn().mockResolvedValue([]),
   getCameras: vi.fn().mockResolvedValue([{ id: "cam", max_queue_length: 8, smoothing_window_s: 2 }]),
   cancelRun: vi.fn(),
 }));
@@ -95,6 +96,38 @@ describe("LiveRunView", () => {
     expect(texts.findIndex((t) => t?.includes("Service started"))).toBeLessThan(texts.findIndex((t) => t?.includes("Joined the queue")));
   });
 
+  it("sorts events newest first by timestamp_s, ties by newest arrival", async () => {
+    const ev = (t: number, type: string) => ({ schema_version: "1.0", event_type: type, timestamp_s: t, frame_index: t });
+    setSocket({ events: [ev(9, "queue_join"), ev(8, "service_start"), ev(10, "queue_abandon"), ev(9, "service_complete")] });
+    view();
+    const items = await screen.findAllByRole("listitem");
+    const order = items.map((i) => i.textContent ?? "");
+    const at = (label: string) => order.findIndex((t) => t.includes(label));
+    expect(at("Left without service")).toBeLessThan(at("Service completed"));
+    expect(at("Service completed")).toBeLessThan(at("Joined the queue"));
+    expect(at("Joined the queue")).toBeLessThan(at("Service started"));
+  });
+
+  it("final run with no socket events shows the events loaded from history", async () => {
+    const ev = (t: number, type: string) => ({ schema_version: "1.0", event_type: type, timestamp_s: t, frame_index: t, person_key: `p${t}` });
+    vi.mocked(api.getEvents).mockResolvedValue([ev(1, "queue_join"), ev(2, "service_start")] as never);
+    setSocket({ connectionState: "ended", run: { ...run, status: "completed" } as never, events: [] });
+    view();
+    expect(await screen.findByText("Joined the queue")).toBeInTheDocument();
+    expect(screen.getByText("Service started")).toBeInTheDocument();
+    expect(api.getEvents).toHaveBeenCalledWith(7);
+  });
+
+  it("does not duplicate an event present in both history and the socket", async () => {
+    const e = { schema_version: "1.0", event_type: "queue_join", timestamp_s: 1, frame_index: 1, person_key: "p1" };
+    vi.mocked(api.getEvents).mockResolvedValue([e] as never);
+    setSocket({ events: [e] as never });
+    view();
+    await waitFor(() => expect(api.getEvents).toHaveBeenCalled());
+    await screen.findByText("Joined the queue");
+    expect(screen.getAllByText("Joined the queue")).toHaveLength(1);
+  });
+
   it("refetches history after a close then open, not on the first open", async () => {
     setSocket();
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -106,6 +139,7 @@ describe("LiveRunView", () => {
     setSocket({ connectionState: "open" });
     rerender(ui());
     await waitFor(() => expect(api.getTimeseries).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.getEvents).toHaveBeenCalledTimes(2));
   });
 
   it("first connect shows no Offline chip; cancel stays disabled after success", async () => {

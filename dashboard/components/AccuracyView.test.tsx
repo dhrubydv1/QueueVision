@@ -95,6 +95,20 @@ describe("AccuracyView", () => {
     rerender(<AccuracyView data={{ ...data, changes_not_adopted: null }} error={null} />);
     expect(screen.queryByText("Changes tried and not adopted")).toBeNull();
   });
+  it("scrolls the changes table horizontally inside its card", () => {
+    render(<AccuracyView data={data} error={null} />);
+    const table = screen.getByText("Change one").closest("table");
+    expect(table?.parentElement).toHaveClass("overflow-x-auto");
+  });
+  it("hides the chart data tables with a clipping wrapper, not on the table itself", () => {
+    // A table ignores width and overflow, so sr-only on the table would still widen the page.
+    render(<AccuracyView data={data} error={null} />);
+    for (const id of ["clip-bars-data", "count-bars-data"]) {
+      const table = screen.getByTestId(id);
+      expect(table).not.toHaveClass("sr-only");
+      expect(table.parentElement).toHaveClass("sr-only");
+    }
+  });
   it("shows missing sources with reason and path", () => {
     const d = { ...data, queue_length: null, missing_sources: [{ section: "queue_length", path: "outputs/x.json", reason: "file not found" }] };
     render(<AccuracyView data={d} error={null} />);

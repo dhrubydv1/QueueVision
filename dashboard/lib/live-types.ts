@@ -70,3 +70,8 @@ export type LiveMessage = SnapshotMessage | ProgressMessage | EventMessage | Sta
 
 export const FINAL_STATUSES = ["completed", "failed", "cancelled"] as const;
 export const WS_NOT_FOUND = 4404;
+
+/** Identity of an event across the socket and the history endpoint: the same event never appears twice. */
+export function eventKey(e: QueueEvent): string {
+  return `${e.event_type}|${e.timestamp_s}|${e.person_key ?? e.track_id ?? ""}`;
+}

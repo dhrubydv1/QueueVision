@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { components } from "./api-types";
 import {
   FINAL_STATUSES,
+  eventKey,
   WS_NOT_FOUND,
   type EventMessage,
   type LiveMessage,
@@ -42,10 +43,6 @@ export function wsBase(): string {
 const EMPTY: LiveSocket = {
   connectionState: "connecting", lastMessageAt: null, run: null, progress: null, events: [], status: null,
 };
-
-function eventKey(e: EventMessage["event"]): string {
-  return `${e.event_type}|${e.timestamp_s}|${e.person_key ?? e.track_id ?? ""}`;
-}
 
 const isFinal = (status: string) => (FINAL_STATUSES as readonly string[]).includes(status);
 

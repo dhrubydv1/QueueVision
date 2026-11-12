@@ -8,7 +8,8 @@ export function formatClock(iso: string | number, tz?: string): string {
   };
   const parts = new Intl.DateTimeFormat("en-GB", options).formatToParts(date);
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  const zone = tz === "Asia/Kathmandu" ? "NPT" : get("timeZoneName");
+  const effective = tz ?? new Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const zone = effective === "Asia/Kathmandu" || effective === "Asia/Katmandu" ? "NPT" : get("timeZoneName");
   return `${get("hour")}:${get("minute")}:${get("second")} ${zone}`.trim();
 }
 

@@ -81,7 +81,7 @@ function ClipSection({ data }: Readonly<{ data: AccuracyData }>) {
         {hasUnassigned ? <Swatch color="var(--color-text-3)" text="Unassigned clips" /> : null}
       </div>
       <HBars data={bars} label="Mean absolute error by clip, in people" unit="people" />
-      <table data-testid="clip-bars-data" className="sr-only">
+      <div className="sr-only"><table data-testid="clip-bars-data">
         <caption>Mean absolute error by clip (people)</caption>
         <thead><tr><th>Clip</th><th>Split</th><th>Mean absolute error (people)</th><th>Frames</th></tr></thead>
         <tbody>
@@ -92,7 +92,7 @@ function ClipSection({ data }: Readonly<{ data: AccuracyData }>) {
             </tr>
           ))}
         </tbody>
-      </table>
+      </table></div>
     </>
   );
 }
@@ -134,7 +134,7 @@ function CountSection({ data }: Readonly<{ data: AccuracyData }>) {
         <CountGroup title="Over-count causes" cats={over} color="var(--color-warn)" />
         <CountGroup title="Under-count causes" cats={under} color="var(--color-primary)" />
       </div>
-      <table data-testid="count-bars-data" className="sr-only">
+      <div className="sr-only"><table data-testid="count-bars-data">
         <caption>Count errors per labelled frame</caption>
         <thead><tr><th>Cause</th><th>Direction</th><th>Per labelled frame</th></tr></thead>
         <tbody>
@@ -142,7 +142,7 @@ function CountSection({ data }: Readonly<{ data: AccuracyData }>) {
             <tr key={c.key}><td>{c.label}</td><td>{c.direction === "over" ? "Over-count" : "Under-count"}</td><td>{formatNumber(c.per_frame, 2)}</td></tr>
           ))}
         </tbody>
-      </table>
+      </table></div>
       {rest.length > 0 ? (
         <p data-testid="count-notes" className="mt-3 text-xs text-text-3">
           {"Not shown as bars: "}
