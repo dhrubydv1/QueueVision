@@ -392,3 +392,54 @@ def test_report_and_final_status_are_stored_atomically(settings, clip, monkeypat
         # the failed commit rolled the report back, so no completed-looking half record exists
         assert run["status"] == "failed" and run["summary"] is None
         assert client.get(f"/api/videos/{video_id}/report").status_code == 404
+
+
+# --- WebSocket Origin check ------------------------------------------------------
+
+
+def _completed_run(client, clip) -> int:
+    video_id = upload(client, clip).json()["video_id"]
+    wait_status(client, video_id)
+    return video_id
+
+
+def test_ws_origin_allowed_default(settings, clip) -> None:
+    with make_client(settings) as client:
+        video_id = _completed_run(client, clip)
+        with client.websocket_connect(
+            f"/ws/videos/{video_id}", headers={"origin": "http://localhost:3000"}
+        ) as ws:
+            assert ws.receive_json()["type"] == "snapshot"
+
+
+def test_ws_origin_rejected(settings, clip) -> None:
+    with make_client(settings) as client:
+        video_id = _completed_run(client, clip)
+        with (
+            pytest.raises(WebSocketDisconnect) as info,
+            client.websocket_connect(f"/ws/videos/{video_id}", headers={"origin": "http://evil.example"}),
+        ):
+            pass
+        assert info.value.code == 1008
+
+
+def test_ws_no_origin_allowed(settings, clip) -> None:
+    with make_client(settings) as client:
+        video_id = _completed_run(client, clip)
+        with client.websocket_connect(f"/ws/videos/{video_id}") as ws:
+            assert ws.receive_json()["type"] == "snapshot"
+
+
+def test_default_origins_follow_host_and_port(settings) -> None:
+    custom = replace(settings, port=9123)
+    assert "http://127.0.0.1:9123" in custom.effective_allowed_origins()
+    assert "http://localhost:9123" in custom.effective_allowed_origins()
+    assert "http://localhost:3000" in custom.effective_allowed_origins()
+    exposed = replace(settings, host="192.168.1.5", port=9123).effective_allowed_origins()
+    assert "http://192.168.1.5:9123" in exposed and "http://localhost:9123" not in exposed
+
+
+def test_allowed_origins_env_parsing(monkeypatch) -> None:
+    monkeypatch.setenv("QUEUEVISION_ALLOWED_ORIGINS", " http://a:1/, ,http://b:2")
+    allowed = ApiSettings.from_env().effective_allowed_origins()
+    assert allowed == {"http://a:1", "http://b:2"}

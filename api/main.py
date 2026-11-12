@@ -352,6 +352,10 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
 
     @app.websocket("/ws/videos/{video_id}")
     async def live(websocket: WebSocket, video_id: VideoId) -> None:
+        origin = websocket.headers.get("origin")
+        if origin is not None and origin not in settings.effective_allowed_origins():
+            await websocket.close(code=1008)  # policy violation: refused before the handshake completes
+            return
         await websocket.accept()
         # Subscribe first so no status message slips between the snapshot read and the forwarding.
         queue, unsubscribe = jobs.subscribe(video_id, asyncio.get_running_loop())

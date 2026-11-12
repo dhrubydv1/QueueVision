@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import os
 from collections.abc import Mapping
@@ -13,6 +14,22 @@ from ai_engine.config import DEFAULT_DEVICE, DEFAULT_MODEL_PATH, PROJECT_ROOT
 
 class SettingsError(ValueError):
     """An environment variable holds an unusable value."""
+
+
+def is_loopback(host: str) -> bool:
+    """True for ``localhost`` and loopback IP addresses; anything else (including 0.0.0.0) is not."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def parse_origins(raw: str) -> tuple[str, ...]:
+    """Split a comma-separated origin list: trim items, strip trailing ``/``, drop empties."""
+    items = (item.strip().rstrip("/") for item in raw.split(","))
+    return tuple(item for item in items if item)
 
 
 def _positive(env: Mapping[str, str], name: str, kind: type[int] | type[float], default):
@@ -43,6 +60,7 @@ class ApiSettings:
     max_queued_jobs: int = 5
     max_video_seconds: float = 1800.0
     max_frame_pixels: int = 3840 * 2160
+    allowed_origins: tuple[str, ...] | None = None  # None: derive the defaults from host/port
 
     @property
     def db_path(self) -> Path:
@@ -60,13 +78,24 @@ class ApiSettings:
     def accuracy_path(self) -> Path:
         return self.data_dir / "accuracy.json"
 
+    def effective_allowed_origins(self) -> frozenset[str]:
+        """Origins a browser may open the live WebSocket from (exact scheme://host[:port])."""
+        if self.allowed_origins is not None:
+            return frozenset(self.allowed_origins)
+        origins = {f"http://{self.host}:{self.port}", "http://localhost:3000", "http://127.0.0.1:3000"}
+        if is_loopback(self.host):
+            origins.add(f"http://localhost:{self.port}")
+        return frozenset(origins)
+
     @classmethod
     def from_env(cls) -> ApiSettings:
         env = os.environ
         defaults = cls(data_dir=PROJECT_ROOT / "data", camera_dir=PROJECT_ROOT / "configs" / "cameras")
         max_mb = env.get("QUEUEVISION_MAX_UPLOAD_MB")
         port = env.get("QUEUEVISION_PORT")
+        origins = env.get("QUEUEVISION_ALLOWED_ORIGINS")
         return cls(
+            allowed_origins=parse_origins(origins) if origins and origins.strip() else None,
             data_dir=Path(env.get("QUEUEVISION_DATA_DIR") or defaults.data_dir),
             camera_dir=Path(env.get("QUEUEVISION_CAMERA_DIR") or defaults.camera_dir),
             max_upload_bytes=int(float(max_mb) * 1024 * 1024) if max_mb else defaults.max_upload_bytes,
