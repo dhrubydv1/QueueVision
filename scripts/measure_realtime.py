@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import statistics
 import sys
 import tempfile
 import time
@@ -27,6 +28,203 @@ if str(PROJECT_ROOT) not in sys.path:
 from api import db  # noqa: E402
 from api.jobs import JobManager, default_tracker_factory  # noqa: E402
 from api.settings import ApiSettings  # noqa: E402
+
+
+class StageTimer:
+    """Per-stage wall-time totals gathered by wrapping functions from outside (no hot-path changes)."""
+
+    def __init__(self) -> None:
+        self.totals: dict[str, float] = {}
+        self.counts: dict[str, int] = {}
+        self.samples: dict[str, list[float]] = {}
+        self.after_wait = False  # set by the wait wrapper; consumed by the next tracker.update
+
+    def reset(self) -> None:
+        self.totals.clear()
+        self.counts.clear()
+        self.samples.clear()
+        self.after_wait = False
+
+    def add(self, name: str, seconds: float, keep: bool = False) -> None:
+        self.totals[name] = self.totals.get(name, 0.0) + seconds
+        self.counts[name] = self.counts.get(name, 0) + 1
+        if keep:
+            self.samples.setdefault(name, []).append(seconds)
+
+    def wrap(self, fn, name: str, keep: bool = False):
+        def timed(*args, **kwargs):
+            began = time.perf_counter()
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                self.add(name, time.perf_counter() - began, keep)
+
+        return timed
+
+
+def install_stage_timers(timer: StageTimer) -> None:
+    """Monkeypatch the pipeline pieces with timing wrappers (only for this process)."""
+    from ai_engine import run_tracking
+    from ai_engine.queue.analyzer import QueueAnalyzer
+    from ai_engine.tracking.tracker import PersonTracker
+    from ai_engine.video.video_loader import VideoLoader, VideoWriter
+    from api import jobs, preview
+
+    original_update = PersonTracker.update
+
+    def update(self, frame):
+        began = time.perf_counter()
+        try:
+            return original_update(self, frame)
+        finally:
+            took = time.perf_counter() - began
+            timer.add("tracker_update", took, keep=True)
+            if timer.after_wait:
+                timer.after_wait = False
+                timer.add("tracker_update_after_wait", took, keep=True)
+            else:
+                timer.add("tracker_update_no_wait", took, keep=True)
+
+    PersonTracker.update = update
+    QueueAnalyzer.update = timer.wrap(QueueAnalyzer.update, "queue_analyzer_update")
+    VideoLoader.read = timer.wrap(VideoLoader.read, "decode_read")
+    VideoLoader.skip = timer.wrap(VideoLoader.skip, "decode_skip")
+    VideoWriter.write = timer.wrap(VideoWriter.write, "video_write")
+    for name in (
+        "blur_heads",
+        "draw_queue_zone",
+        "draw_service_point",
+        "draw_people",
+        "draw_alert_banner",
+        "draw_metrics_panel",
+    ):
+        setattr(run_tracking, name, timer.wrap(getattr(run_tracking, name), f"draw:{name}"))
+    preview.PreviewStore.offer = timer.wrap(preview.PreviewStore.offer, "preview_offer", keep=True)
+    original_render = preview.render_preview
+    preview.render_preview = timer.wrap(original_render, "preview_render")  # called only on encodes
+    original_process = jobs.process_video
+
+    def process_video(*args, on_frame=None, **kwargs):
+        return original_process(*args, on_frame=timer.wrap(on_frame, "on_frame_total"), **kwargs)
+
+    jobs.process_video = process_video
+    jobs.JobManager._publish = timer.wrap(jobs.JobManager._publish, "publish")
+    for fname in ("add_events", "add_timeseries", "set_progress"):
+        setattr(db, fname, timer.wrap(getattr(db, fname), f"db:{fname}"))
+    jobs.process_video_wrapped = True
+
+
+def percentile(values: list[float], q: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, int(q * len(ordered)))]
+
+
+def spread(values: list[float]) -> dict:
+    return {"min": min(values), "median": statistics.median(values), "max": max(values), "all": values}
+
+
+def run_stages(args, fps: float, count: int) -> int:
+    """Repeat fast/real-time runs per stride with per-stage timing; write raw results to a folder."""
+    timer = StageTimer()
+    waits: list[float] = []
+    out_dir: Path = args.stages_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    runs: list[dict] = []
+    with tempfile.TemporaryDirectory(prefix="qv_pacing_") as tmp:
+        settings = ApiSettings(data_dir=Path(tmp), camera_dir=PROJECT_ROOT / "configs" / "cameras")
+        settings.data_dir.mkdir(parents=True, exist_ok=True)
+        conn = db.connect(settings.db_path)
+        db.init_db(conn)
+        conn.close()
+
+        def counting_wait(delay: float) -> object:
+            began = time.monotonic()
+            if args.spin_wait:  # diagnostic: keep the core busy instead of sleeping
+                deadline = began + delay
+                while time.monotonic() < deadline:
+                    pass
+                result = False
+            else:
+                result = manager._interrupt.wait(delay)
+            waits.append(time.monotonic() - began)
+            timer.add("pacing_wait", waits[-1])
+            timer.after_wait = True
+            return result
+
+        manager = JobManager(settings, default_tracker_factory(settings), wait=counting_wait)
+        manager.start()
+        try:
+            install_stage_timers(timer)
+            # Throwaway run: loads the detector so no measured run includes the model load.
+            run_job(settings, manager, args.video, args.camera, realtime=False, stride=1)
+            for stride in args.strides:
+                for rep in range(1, args.repeats + 1):
+                    for realtime in (False, True) if not args.realtime_first else (True, False):
+                        timer.reset()
+                        waits.clear()
+                        job = run_job(settings, manager, args.video, args.camera, realtime, stride)
+                        waited = sum(waits)
+                        updates = timer.samples.get("tracker_update", [])
+                        record = {
+                            "stride": stride,
+                            "rep": rep,
+                            "realtime": realtime,
+                            "wall_s": job["wall_s"],
+                            "waited_s": waited,
+                            "wait_calls": len(waits),
+                            "non_wait_s": job["wall_s"] - waited,
+                            "frames": len(updates),
+                            "stage_totals_s": dict(timer.totals),
+                            "stage_counts": dict(timer.counts),
+                            "update_ms": {
+                                k: {
+                                    "n": len(timer.samples.get(k, [])),
+                                    "median": 1000 * statistics.median(timer.samples[k]),
+                                    "p90": 1000 * percentile(timer.samples[k], 0.9),
+                                }
+                                for k in (
+                                    "tracker_update",
+                                    "tracker_update_no_wait",
+                                    "tracker_update_after_wait",
+                                )
+                                if timer.samples.get(k)
+                            },
+                            "preview_offer_ms_median_encoded": 1000
+                            * statistics.median(
+                                [x for x in timer.samples.get("preview_offer", []) if x > 0.002] or [0]
+                            ),
+                        }
+                        runs.append(record)
+                        mode = "RT  " if realtime else "fast"
+                        print(
+                            f"stride {stride} rep {rep} {mode} wall {record['wall_s']:.3f} "
+                            f"waited {waited:.3f} non-wait {record['non_wait_s']:.3f} "
+                            f"frames {record['frames']}",
+                            flush=True,
+                        )
+        finally:
+            manager.stop()
+
+    summary: dict = {
+        "video": args.video.name,
+        "clip_fps": fps,
+        "clip_frames": count,
+        "runs": runs,
+        "spread": {},
+    }
+    for stride in args.strides:
+        for realtime in (False, True):
+            sel = [r for r in runs if r["stride"] == stride and r["realtime"] == realtime]
+            key = f"stride_{stride}_{'realtime' if realtime else 'fast'}"
+            summary["spread"][key] = {
+                m: spread([r[m] for r in sel]) for m in ("wall_s", "waited_s", "non_wait_s")
+            }
+    (out_dir / args.stages_file).write_text(json.dumps(summary, indent=2) + "\n")
+    print(json.dumps(summary["spread"], indent=2))
+    return 0
+
 
 COMPARED = {"waits": "*_waits.csv", "timeseries": "*_queue.csv", "events": "*_events.jsonl"}
 
@@ -77,6 +275,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output", type=Path, default=PROJECT_ROOT / "outputs" / "s7_realtime" / "summary.json"
     )
+    parser.add_argument("--stages", action="store_true", help="per-stage timing mode (see run_stages)")
+    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--strides", type=int, nargs="+", default=[1, 3])
+    parser.add_argument(
+        "--realtime-first", action="store_true", help="run the real-time job before the fast one"
+    )
+    parser.add_argument(
+        "--spin-wait", action="store_true", help="diagnostic: busy-wait instead of sleeping in pacing waits"
+    )
+    parser.add_argument("--stages-file", default="stages.json")
+    parser.add_argument("--stages-dir", type=Path, default=PROJECT_ROOT / "outputs" / "s8_pacing")
     args = parser.parse_args(argv)
 
     capture = cv2.VideoCapture(str(args.video))
@@ -87,6 +296,8 @@ def main(argv: list[str] | None = None) -> int:
     count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
     capture.release()
     duration = count / fps
+    if args.stages:
+        return run_stages(args, fps, count)
 
     waits: list[float] = []  # seconds actually spent in each real-time pacing wait
 

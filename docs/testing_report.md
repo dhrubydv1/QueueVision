@@ -1,9 +1,47 @@
 # Testing Report
 
-Sprint 7 (session 2) results come first, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
+The Sprint 8 pacing investigation comes first, then Sprint 7 (session 2) results, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
 kept at the end. Every number here comes from a command that was actually run
 on the machine described under Sprint 2 (same environment). Nothing was
 estimated.
+
+## Sprint 8: real-time pacing gap (2026-11-13)
+
+Question: at stride 3 the Sprint 7 real-time run spent 12.6 s outside the pacing waits against 9.2 s for
+the whole fast run. Where does the extra non-wait time go? Method: `scripts/measure_realtime.py --stages`
+(timing wrappers applied from the script; no `ai_engine` or `api` code changed) on `cad_seq25.mp4`
+(617 frames, 20.567 s, MPS, yolo11n), one throwaway fast run first so the model load is in no measured
+run, then fast and real-time jobs alternating, 3 repeats per stride, one job at a time. Raw data:
+`outputs/s8_pacing/` (gitignored).
+
+| Stride, mode | Wall s (min / median / max) | Waited s | Non-wait s (min / median / max) |
+|---|---|---|---|
+| 1, fast | 25.914 / 26.062 / 26.704 | 0 | 25.914 / 26.062 / 26.704 |
+| 1, real time | 26.172 / 26.183 / 26.256 | 0 (never waited) | 26.172 / 26.183 / 26.256 |
+| 3, fast | 8.927 / 9.079 / 9.279 | 0 | 8.927 / 9.079 / 9.279 |
+| 3, real time | 21.200 / 21.381 / 21.457 | 8.459 / 8.534 / 8.690 (205 waits) | 12.691 / 12.741 / 12.923 |
+
+The gap reproduces: stride 3 real-time non-wait is about 3.7 s more than the fast run's total. Stage
+totals, stride 3, repeat 1 (fast -> real time, seconds): tracker update 6.925 -> 9.385; head blur 0.414 ->
+0.669; video write 0.591 -> 0.869; preview offer 0.131 -> 0.365 (renders 39 -> 79); metrics panel, zone,
+people and service-point drawing, decode and queue analyzer together 0.46 -> 0.79. DB writes (0.005 s),
+publish (0.000 s) and the on_frame work other than the wait and preview are negligible. Per-frame
+detector+tracker update: median 32.9 ms (p90 35.7) fast against 45.7 ms (p90 51.6) in real time; the
+204 updates that follow a wait are the slow ones, the 3 that do not (the first frames) match the fast
+run at about 33 ms.
+
+Cause: every stage, CPU-bound OpenCV drawing as well as MPS inference, runs about 1.3 to 1.7 times
+slower once the worker sleeps about 40 ms between frames. Inference alone accounts for roughly 2.5 s
+of the 3.7 s. The preview contributes about 0.2 s: its 5-per-second limit is by wall clock, so a run
+that lasts twice as long encodes about twice as many previews (79 against 39). Check: the same
+real-time runs with the pacing wait replaced by a busy-wait (diagnostic `--spin-wait`, not product
+behaviour) give non-wait 9.599 / 9.584 / 10.172 s and a per-frame update median of 34.1 to 34.4 ms,
+essentially the fast run's 32.4 to 32.7 ms (the fast run in that batch has one slow outlier, 12.560 s).
+So the extra time comes from the machine slowing down while idle between frames (power state), not from
+a code defect, and it is not caused by the DB flush, publishing or pacing logic. It is not a bug and
+nothing was changed. Effect on users: none beyond a slightly slower inference; pacing already skips
+a wait when the run is late, and real-time wall time stays within 0.6 to 0.9 s of the 20.567 s clip
+at stride 3. Stride 1 never waits because it processes at about 23.7 fps, below the clip's 30.
 
 ## Sprint 7, session 2 (2026-11-12): dashboard, preview, real-time option
 
