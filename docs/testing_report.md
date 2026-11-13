@@ -12,7 +12,7 @@ browser runs so far are the automated Playwright e2e tests (Task 3, 2026-11-13: 
 and WebKit 6; WebKit is Playwright's engine, not Safari itself). The screenshots from Sprint 7 predate the
 Sprint 7 fixes and the Sprint 8 dashboard changes, so they must be re-taken.
 
-Setup: `scripts/run_api.sh` or `.venv/bin/uvicorn api.main:app` (default port 8000), build the dashboard
+Setup: `python -m api` from the repository root (port 8000), build the dashboard
 (`cd dashboard && npm run build`), open `http://127.0.0.1:8000`. For a phone, use the machine's LAN address and
 add that origin to the API's allowed origins (see `docs/api.md`). Use a clip with people (for example
 `cad_seq25.mp4`) so there is something to see. Save screenshots to `outputs/s8_screens/` (gitignored), named
