@@ -249,6 +249,19 @@ keeping the partial results.
 `waits`, `alerts` and `timeseries`; the last four reference `videos` with
 `ON DELETE CASCADE`. Columns are listed in [api.md](api.md).
 
+**Adding a schema migration.** `_SCHEMA` in `api/db.py` stays the version 1
+schema and is never edited. To change the schema, write
+`_migrate_N_to_M(conn)` (plain SQL on the given connection; do not commit) and
+append `(M, _migrate_N_to_M)` to `MIGRATIONS` with consecutive versions. `init_db`
+creates the version 1 tables for a new database and applies every migration;
+for an existing older database it first copies the file to
+`<db>.bak-v<from>-<UTC timestamp>` (SQLite backup API, WAL-safe), then runs each
+migration and its `schema_version` bump in one transaction, so a failing
+migration rolls back, the version stays and the backup remains. A database
+already at the latest version is untouched. Add a test that builds the previous
+schema from its DDL, runs `init_db`, and checks the rows, the version and the
+backup (see `tests/test_api_db.py`).
+
 ## Dashboard, serving and live preview (Sprint 7)
 
 ```

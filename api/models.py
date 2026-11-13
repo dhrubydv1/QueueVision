@@ -74,6 +74,8 @@ class Alert(BaseModel):
     reasons: str
     queue_length: float
     predicted_wait_s: float | None = None
+    acknowledged_at: str | None = None
+    acknowledged_by: str | None = None
 
 
 class TimeseriesRow(BaseModel):

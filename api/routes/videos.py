@@ -68,6 +68,8 @@ class UploadGuardRoute(APIRoute):
         return guarded
 
 
+# Several routers instead of one: this only keeps the OpenAPI path order (and the include order in
+# api/main.py) identical to the old single-function layout; it has nothing to do with route matching.
 router = APIRouter()  # reads and listing
 mutation_router = APIRouter()  # cancel and delete
 upload_router = APIRouter(route_class=UploadGuardRoute)  # POST /api/videos only
@@ -175,6 +177,18 @@ def alerts(video_id: VideoId, settings: SettingsDep) -> list[dict]:
     get_record(settings, video_id)
     with open_db(settings) as conn:
         return db.list_alerts(conn, video_id)
+
+
+@router.post("/api/videos/{video_id}/alerts/{alert_id}/ack", response_model=Alert)
+def acknowledge_alert(
+    video_id: VideoId, alert_id: Annotated[int, PathParam(ge=1, le=MAX_VIDEO_ID)], settings: SettingsDep
+) -> dict:
+    get_record(settings, video_id)
+    with open_db(settings) as conn:
+        alert = db.acknowledge_alert(conn, video_id, alert_id)
+    if alert is None:
+        raise HTTPException(404, f"alert {alert_id} not found for video {video_id}")
+    return alert
 
 
 @router.get("/api/videos/{video_id}/timeseries", response_model=list[TimeseriesRow])

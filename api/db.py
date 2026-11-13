@@ -5,13 +5,14 @@ from __future__ import annotations
 import contextlib
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from ai_engine.metrics.queue_outputs import TIMESERIES_COLUMNS
 
-DB_SCHEMA_VERSION = 1
+_BASE_VERSION = 1  # the schema _SCHEMA creates; MIGRATIONS take it forward from here
 
 _TS_TYPES = {
     "time_s": "REAL",
@@ -120,14 +121,92 @@ def connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _migrate_1_to_2(conn: sqlite3.Connection) -> None:
+    """Alert acknowledgement: who/when an operator acknowledged an alert."""
+    conn.execute("ALTER TABLE alerts ADD COLUMN acknowledged_at TEXT")
+    conn.execute("ALTER TABLE alerts ADD COLUMN acknowledged_by TEXT")
+
+
+# (target version, migration from the previous version). Append only; versions are consecutive from 2.
+MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [(2, _migrate_1_to_2)]
+
+
+def _read_version(conn: sqlite3.Connection) -> int | None:
+    """The stored schema version, or None for a database with no version row (new)."""
+    has_meta = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_meta'"
+    ).fetchone()
+    if not has_meta:
+        return None
+    row = conn.execute("SELECT value FROM schema_meta WHERE key = 'schema_version'").fetchone()
+    return int(row[0]) if row else None
+
+
+def _backup_database(conn: sqlite3.Connection, from_version: int) -> Path | None:
+    """Copy the database to ``<db>.bak-v<from>-<UTC timestamp>`` with the SQLite backup API (WAL-safe)."""
+    file = conn.execute("PRAGMA database_list").fetchone()[2]
+    if not file:
+        return None  # in-memory database: nothing on disk to protect
+    source = Path(file)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    target = source.with_name(f"{source.name}.bak-v{from_version}-{stamp}")
+    counter = 1
+    while target.exists():  # two starts in one second must not overwrite an earlier backup
+        target = source.with_name(f"{source.name}.bak-v{from_version}-{stamp}-{counter}")
+        counter += 1
+    dest = sqlite3.connect(target)
+    try:
+        conn.backup(dest)
+    finally:
+        dest.close()
+    return target
+
+
 def init_db(conn: sqlite3.Connection) -> None:
-    """Create the tables if missing and record the schema version (idempotent)."""
+    """Create the schema for a new database, or migrate an older one (idempotent).
+
+    A new database gets the version 1 tables and then every migration, with no backup. An existing
+    database older than the latest version is backed up once, then each pending migration runs in its
+    own transaction together with its version bump; a failing migration rolls back and re-raises.
+    """
+    current = _read_version(conn)
+    fresh = current is None
+    if fresh:
+        with conn:
+            conn.executescript(_SCHEMA)
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', ?)",
+                (str(_BASE_VERSION),),
+            )
+        current = _BASE_VERSION
+    pending = [(v, fn) for v, fn in MIGRATIONS if v > current]
+    if not pending:
+        return
+    if not fresh:
+        _backup_database(conn, current)
+    for version, migrate in pending:
+        conn.execute("BEGIN")
+        try:
+            migrate(conn)
+            conn.execute("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'", (str(version),))
+        except BaseException:
+            conn.rollback()
+            raise
+        conn.commit()
+
+
+def acknowledge_alert(conn: sqlite3.Connection, video_id: int, alert_id: int) -> dict | None:
+    """Stamp ``acknowledged_at`` once (UTC, seconds); later calls return the row unchanged. None if absent."""
     with conn:
-        conn.executescript(_SCHEMA)
         conn.execute(
-            "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('schema_version', ?)",
-            (str(DB_SCHEMA_VERSION),),
+            "UPDATE alerts SET acknowledged_at = ? WHERE alert_id = ? AND video_id = ?"
+            " AND acknowledged_at IS NULL",
+            (datetime.now(UTC).isoformat(timespec="seconds"), alert_id, video_id),
         )
+    row = conn.execute(
+        "SELECT * FROM alerts WHERE alert_id = ? AND video_id = ?", (alert_id, video_id)
+    ).fetchone()
+    return dict(row) if row else None
 
 
 def create_video(conn: sqlite3.Connection, original_name: str, camera_id: str, options: dict) -> int:
