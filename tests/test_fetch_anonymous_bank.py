@@ -1,6 +1,7 @@
 """Tests for the Anonymous Bank fetch script (fake downloader, no network)."""
 
 import hashlib
+import shutil
 import zipfile
 from pathlib import Path
 from typing import ClassVar
@@ -170,3 +171,29 @@ def test_short_read_raises(tmp_path, monkeypatch):
 
 def test_bern_items_pinned():
     assert all(i.expected_sha256 for i in fab.ITEMS)
+
+
+def test_deleted_extracted_dir_with_marker_is_reextracted(tmp_path):
+    good = tmp_path / "good.zip"
+    _zip(good, {"a.txt": b"x", "sub/b.txt": b"y"})
+    calls = []
+
+    def fake(url, dest):
+        calls.append(url)
+        dest.write_bytes(good.read_bytes())
+
+    items = [fab.Item("bern", "a.zip", "https://x/a.zip")]
+    man = tmp_path / "m.csv"
+    fab.fetch_all(tmp_path / "raw", man, fake, items, log=lambda m: None)
+    shutil.rmtree(tmp_path / "raw/bern/extracted")
+    assert (tmp_path / "raw/bern/.extracted_a.zip").exists()
+    fab.fetch_all(tmp_path / "raw", man, fake, items, log=lambda m: None)
+    assert len(calls) == 1
+    assert (tmp_path / "raw/bern/extracted/sub/b.txt").exists()
+
+
+def test_bad_zip_wrapped_in_fetch_error(tmp_path):
+    bad = tmp_path / "bad.zip"
+    bad.write_bytes(b"not a zip")
+    with pytest.raises(fab.FetchError, match="not a valid zip"):
+        fab.safe_extract_zip(bad, tmp_path / "out")

@@ -177,6 +177,14 @@ def extract_rar(rar_path: Path, out_dir: Path) -> None:
         ) from exc
 
 
+def _extracted_ok(marker: Path, out: Path) -> bool:
+    """True when the marker exists and every member it lists is present under ``out``."""
+    if not marker.exists():
+        return False
+    members = marker.read_text(encoding="utf-8").splitlines()[1:]
+    return all((out / m).is_file() for m in members)
+
+
 def merge_dir(src: Path, dst: Path) -> None:
     """Move the contents of ``src`` into ``dst`` (created if needed), replacing same-named files."""
     dst.mkdir(parents=True, exist_ok=True)
@@ -234,17 +242,22 @@ def fetch_all(
             "sha256": digest,
         }
         write_manifest(manifest_path, rows)
-        if extract and item.name.endswith((".rar", ".zip")) and not marker.exists():
+        if (
+            extract
+            and item.name.endswith((".rar", ".zip"))
+            and not _extracted_ok(marker, dest.parent / "extracted")
+        ):
             out = dest.parent / "extracted"
             tmp = dest.parent / "extracted.tmp"
             shutil.rmtree(tmp, ignore_errors=True)
             log(f"extract: {key} -> {out}")
             try:
                 (extract_rar if item.name.endswith(".rar") else safe_extract_zip)(dest, tmp)
+                members = sorted(f.relative_to(tmp).as_posix() for f in tmp.rglob("*") if f.is_file())
                 merge_dir(tmp, out)
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
-            marker.write_text(digest + "\n", encoding="utf-8")
+            marker.write_text("\n".join([digest, *members]) + "\n", encoding="utf-8")
     return rows
 
 
