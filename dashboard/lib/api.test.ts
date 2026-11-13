@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, apiGet, cancelRun, previewMjpegUrl, reportUrl, timeseriesCsvUrl, uploadVideo, videoUrl } from "./api";
+import { ApiError, ackAlert, apiGet, cancelRun, previewMjpegUrl, reportUrl, timeseriesCsvUrl, uploadVideo, videoUrl } from "./api";
 
 function respond(status: number, body: unknown, json = true): Response {
   return new Response(json ? JSON.stringify(body) : String(body), {
@@ -56,6 +56,15 @@ describe("writes and URLs", () => {
     vi.stubGlobal("fetch", fetchMock);
     await cancelRun(3);
     expect(fetchMock.mock.calls[0][0]).toMatch(/\/api\/videos\/3\/cancel$/);
+  });
+  it("posts an alert acknowledgement and surfaces the API detail on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(respond(200, { alert_id: 5 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await ackAlert(3, 5);
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/api\/videos\/3\/alerts\/5\/ack$/);
+    expect(fetchMock.mock.calls[0][1].method).toBe("POST");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(respond(404, { detail: "Alert 5 not found" })));
+    await expect(ackAlert(3, 5)).rejects.toMatchObject({ message: "Alert 5 not found", status: 404 });
   });
   it("builds media URLs", () => {
     expect(previewMjpegUrl(4)).toMatch(/\/api\/videos\/4\/preview\.mjpg$/);
