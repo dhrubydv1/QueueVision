@@ -498,7 +498,7 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
         for candidate in candidates:
             found = _safe_file(root, candidate)
             if found is not None:
-                headers = NO_CACHE if found.suffix == ".html" else None
+                headers = None if found.relative_to(root).parts[:2] == ("_next", "static") else NO_CACHE
                 return FileResponse(found, media_type=_media_type(found), headers=headers)
         not_found = _safe_file(root, "404.html")
         if not_found is not None:

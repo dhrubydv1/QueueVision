@@ -167,7 +167,9 @@ test("Overview hydrates without console errors and shows no build-time date or c
 
   const html = await (await request.get(`${BASE_URL}/`)).text();
   expect(html).not.toMatch(/runs? processing/);
-  expect(html).not.toMatch(new RegExp(String(new Date().getFullYear())));
+  // The rendered date is "<weekday> <day> <month name> <year>"; RSC module ids may contain digits, so look for that shape.
+  const monthYear = new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date());
+  expect(html).not.toContain(monthYear);
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();

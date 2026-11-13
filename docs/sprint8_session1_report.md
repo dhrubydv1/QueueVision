@@ -115,5 +115,5 @@ is. Full tables and stage breakdown: `docs/testing_report.md`.
   schema v2, `ai_engine/live/` capture and pacing, `worker/` package, ingest and supervisor routes, recording
   off by default); the brief records it only in summary.
 - Awareness that real-time pacing carries a roughly 40 percent per-frame slowdown when idle between frames on
-  this machine; live-camera pacing and its measurements should account for it (for example by measuring with
+  this machine (inferred; one machine, one clip); live-camera pacing and its measurements should account for it (for example by measuring with
   and without the wait).

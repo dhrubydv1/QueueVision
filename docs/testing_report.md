@@ -12,26 +12,34 @@ browser runs so far are the automated Playwright e2e tests (Task 3, 2026-11-13: 
 and WebKit 6; WebKit is Playwright's engine, not Safari itself). The screenshots from Sprint 7 predate the
 Sprint 7 fixes and the Sprint 8 dashboard changes, so they must be re-taken.
 
-Setup: `python -m api` from the repository root (port 8000), build the dashboard
-(`cd dashboard && npm run build`), open `http://127.0.0.1:8000`. For a phone, use the machine's LAN address and
-add that origin to the API's allowed origins (see `docs/api.md`). Use a clip with people (for example
+Setup: from the repository root run `.venv/bin/python -m api` (port 8000, binds 127.0.0.1 only), build the
+dashboard (`cd dashboard && npm run build`), open `http://127.0.0.1:8000`. Use a clip with people (for example
 `cad_seq25.mp4`) so there is something to see. Save screenshots to `outputs/s8_screens/` (gitignored), named
 `<browser>_<page>.png`, for example `safari_live.png`.
 
-Fill the Result column with PASS, FAIL (say what you saw) or N/A. Leave blank what was not checked.
+Phone column: by default, check the phone layout with a device emulator on the same machine (desktop Chrome
+device toolbar or Safari responsive design mode, 390 x 844, touch on). A real phone needs an explicit,
+temporary team decision, because the API has no login: anyone on the same network could upload or delete
+runs. If the team decides to do it, use a trusted network only, run
+`QUEUEVISION_ALLOWED_ORIGINS=http://<LAN-IP>:8000 .venv/bin/python -m api --host <LAN-IP>` (see
+`docs/api.md`), open `http://<LAN-IP>:8000` on the phone, and revert to the default 127.0.0.1 binding when done.
+
+Fill the Result columns with PASS, FAIL (say what you saw) or N/A. Leave blank what was not checked.
 
 | # | Page | What to look at | Chrome | Safari | Phone | Notes |
 |---|---|---|---|---|---|---|
-| 1 | Overview (`/`) | Loads without console errors; date and "N runs processing" appear after load, no flash or hydration warning; nav links easy to click (at least 44 px tall) | | | | |
-| 2 | Live, real-time run processing | Start a real-time run from the upload form. Preview shows video with **heads blurred**; counters, wait times and alerts update; times shown are NPT (non-productive-time) values as labelled; Stop works and the page shows the run as stopped | | | | |
-| 3 | Recorded run | Pick a finished run. Overview/Alerts/Timeline tabs switch by click and by arrow keys (Left/Right, Home/End) with focus following; **video seek** by dragging the bar and clicking a timeline/alert item; heads blurred in the video; wait times (NPT) match the Runs table | | | | |
-| 4 | Recorded run, Alerts tab | Congestion events read "Congestion started" and "Congestion ended"; no unknown event type is labelled "started"; the acknowledge note ("hides this banner on this screen only") is visible without hovering | | | | |
-| 5 | Runs | List, sorting and links work; status badges readable; no horizontal scroll on phone | | | | |
-| 6 | Accuracy | Wording: a missing or unmeasured metric reads **Unknown** or **Insufficient data**, never 0 or a made-up number; predicted and observed wait evaluations are shown separately; unreadable source files are listed as missing | | | | |
-| 7 | `/legacy` | Old test page loads; `/legacy?x=1` keeps the query string; `/legacy` redirects to `/legacy/` | | | | |
-| 8 | API stopped | Stop the API while a page is open: an **Offline banner** appears, and it goes away when the API returns; no blank page | | | | |
-| 9 | Phone only | **No horizontal scroll** on any page in portrait; tabs and buttons are tappable; AlertBanner explanation reachable by touch | | | | |
-| 10 | Any | Keyboard: Tab order visible focus ring; AlertBanner explanation reachable by keyboard | | | | |
+| 1 | Overview (`/`) | Loads without console errors. After load the line under "Overview" shows the full date (for example "Friday 13 November 2026") and "N runs processing" (or "1 run processing"); no flash, no hydration warning. The nav links are at least 44 px tall (top bar on desktop, bottom bar on phone) | | | | |
+| 2 | Overview, lists | "Latest completed runs" (up to 3) and "Recent recorded runs" (up to 10) link to the run; a processing run shows a card and a "Watch live" link; the accuracy summary card is present, or says the accuracy data is not generated | | | | |
+| 3 | Runs (`/runs`) | Upload form: Video file, Camera config, Every Nth frame, Blur heads, Process in real time, Start. The "All runs" table has columns Name, Camera, Status, Created, Frames processed (newest first; there is no sorting). The Created column is a clock time with the browser's zone (shows "NPT" only when the browser zone is Asia/Kathmandu, which means Nepal Time). Status chips are readable; no horizontal scroll on phone | | | | |
+| 4 | Live (`/live?id=N`), real-time run | Upload with "Process in real time" ticked: the page opens on `/live`. The preview shows video with **heads blurred**; Queue length, Predicted wait, Service rate and People in frame update; the queue chart and Events list grow; "Last update HH:MM:SS" appears. **Cancel run** stops the run and the chip changes to Cancelled; "Open the recorded run" then appears | | | | |
+| 5 | Live, congestion banner | When congestion is active a "Congestion alert" banner appears with its reasons and the chip reads "Live · congested". The note "Acknowledge hides this banner on this screen only; nothing is recorded." is visible without hovering, and the **Acknowledge** button hides the banner. (This note is on the Live page only.) | | | | |
+| 6 | Live, offline | Stop the API while the Live page is open: the chip changes to **Offline**, a message "Connection lost. Reconnecting; values below are not current." appears, and the figures are dimmed with a "Last update" line. When the API returns the chip goes back to Live and the message goes away. No blank page | | | | |
+| 7 | Recorded run (`/run?id=N`) | Pick a finished run. Header shows the status chip, "every Nth frame · heads blurred · fast or real time" and the camera; summary cards; the queue chart. The video is the browser's plain video control: press play and drag the scrubber to seek (there is no click-to-seek from the chart or lists). Heads are blurred. A run made with Blur heads off shows a note instead of the video. "Report (JSON)" and "Time series (CSV)" links work; Delete asks "Delete run N?" and Keep cancels it | | | | |
+| 8 | Recorded run, tabs | Three tabs: **Waits**, **Events**, **Alerts**. They switch by click and by Left/Right arrows, Home and End, with focus and selection moving together. Waits lists Person, Joined, Service, Wait, Abandoned; Alerts lists Time, Event, Queue length, Reasons. Congestion rows read "Congestion started" and "Congestion ended" | | | | |
+| 9 | Accuracy (`/accuracy`) | Headline cards (mean absolute error, bias, within one person) show numbers with their frame counts. A section whose source file is missing reads "Not available — <reason> (<path>)", never 0. The Waiting time card reads "Measured" with "N recorded clips", or "Not measured yet". The split buttons (All, Validation, Test) change the count-error charts; "Limits of these numbers" is listed | | | | |
+| 10 | `/legacy` | The old test page loads; `/legacy?x=1` keeps the query string; `/legacy` redirects to `/legacy/` | | | | |
+| 11 | Phone / emulator only | No horizontal scroll on any page in portrait (Overview, Runs, a run, Live, Accuracy); buttons and tabs are tappable; the Acknowledge button is easy to hit | | | | |
+| 12 | Any | Keyboard: Tab order is logical and the focus ring is visible; the Acknowledge note is read together with the button | | | | |
 
 Tester name, date, browser and OS versions, device: ______________________________
 
@@ -78,7 +86,7 @@ about 1.3 to 1.7 times slower once the worker sleeps about 40 ms between frames.
 for roughly 2.5 s of the 3.7 s. The preview contributes about 0.2 s: its 5-per-second limit is by wall
 clock, so a run that lasts twice as long encodes about twice as many previews (79 against 39). The
 evidence is that a busy-wait removes the gap: the same real-time runs with the pacing wait replaced by a
-busy-wait (diagnostic `--spin-wait`, not product behaviour) give non-wait 9.599 / 9.584 / 10.172 s and a
+busy-wait (diagnostic `--spin-wait`, not product behaviour) give non-wait 9.584 / 9.599 / 10.172 s (min / median / max) and a
 per-frame update median of 34.1 to 34.4 ms, essentially the fast run's 32.4 to 32.7 ms (the fast run in
 that batch has one slow outlier, 12.560 s). This is consistent with the machine slowing down while idle
 between frames (for example a CPU/GPU power state); power, frequency and thermal counters were not

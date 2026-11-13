@@ -207,7 +207,7 @@ export function AccuracyView({ data, error }: Readonly<{ data: AccuracyData | un
         <MetricCard
           label="Waiting time"
           value={data.waiting_time ? "Measured" : "Not measured yet"}
-          caption={data.waiting_time ? `${data.waiting_time.per_clip.length} recorded clips` : undefined}
+          caption={data.waiting_time ? `${new Set(data.waiting_time.per_clip.map((c) => c.clip)).size} recorded clips` : undefined}
         />
       </section>
       <Section title="Error by clip"><ClipSection data={data} /></Section>

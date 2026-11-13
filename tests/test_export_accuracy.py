@@ -273,3 +273,25 @@ def test_accuracy_route(tmp_path: Path) -> None:
         settings.accuracy_path.write_text("{not json")
         bad = client.get("/api/accuracy")
         assert bad.status_code == 500 and bad.json() == {"detail": "accuracy data unreadable"}
+
+
+def test_wait_eval_unreadable_reason_has_no_absolute_path(tmp_path: Path) -> None:
+    outputs, splits = make_sources(tmp_path)
+    write(outputs / "metrics" / "cad_a_wait_eval.json", {"metrics": {"waits": {}}})
+    bad = outputs / "metrics" / "bad_wait_eval.json"
+    bad.mkdir()  # reading a directory raises OSError that names the absolute path
+    out = build_accuracy(outputs, splits, NOW)
+    reason = next(m["reason"] for m in out["missing_sources"] if m["path"].endswith("bad_wait_eval.json"))
+    assert str(tmp_path) not in reason and reason.startswith("unreadable: ")
+
+
+def test_wait_eval_glob_is_sorted(tmp_path: Path, monkeypatch) -> None:
+    outputs, splits = make_sources(tmp_path)
+    write(outputs / "metrics" / "cad_a_wait_eval.json", {"metrics": {}})
+    for name in ("z", "m", "b"):
+        (outputs / "metrics" / f"{name}_wait_eval.json").write_text("{bad")
+    real_glob = Path.glob
+    monkeypatch.setattr(Path, "glob", lambda self, pat: reversed(sorted(real_glob(self, pat))))
+    out = build_accuracy(outputs, splits, NOW)
+    paths = [m["path"] for m in out["missing_sources"] if m["section"] == "waiting_time"]
+    assert paths == sorted(paths) and len(paths) == 3

@@ -210,7 +210,7 @@ def _waiting_time(outputs: Path, missing: list[dict]) -> dict | None:
     Unreadable or malformed files are reported in ``missing`` rather than skipped.
     """
     per_clip, pooled = [], {}
-    for path in (outputs / "metrics").glob("*_wait_eval.json"):
+    for path in sorted((outputs / "metrics").glob("*_wait_eval.json")):
         stem = path.name.removesuffix("_wait_eval.json")
         observed = stem.endswith("_observed")
         clip = stem.removesuffix("_observed") if observed else stem
@@ -219,7 +219,9 @@ def _waiting_time(outputs: Path, missing: list[dict]) -> dict | None:
         try:
             data = json.loads(path.read_text())
         except (OSError, ValueError) as error:
-            missing.append({"section": "waiting_time", "path": source, "reason": f"unreadable: {error}"})
+            detail = getattr(error, "strerror", None)
+            reason = f"unreadable: {type(error).__name__}" + (f" ({detail})" if detail else "")
+            missing.append({"section": "waiting_time", "path": source, "reason": reason})
             continue
         if not isinstance(data, dict) or "metrics" not in data:
             missing.append(

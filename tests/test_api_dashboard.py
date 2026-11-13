@@ -26,6 +26,7 @@ def export_dir(tmp_path: Path) -> Path:
     (out / "live.html").write_text("<html>LIVE-PAGE</html>")
     (out / "404.html").write_text("<html>NOT-FOUND-PAGE</html>")
     (out / "_next" / "static" / "x.js").write_text("console.log(1)")
+    (out / "index.txt").write_text("rsc-payload")
     (tmp_path / "secret.txt").write_text("TOP-SECRET")
     return out
 
@@ -93,5 +94,6 @@ def test_dashboard_html_not_cached_static_assets_cached(tmp_path: Path, export_d
         for path in ("/", "/live", "/live.html", "/index.html", "/nope", "/404.html"):
             assert client.get(path).headers.get("cache-control") == "no-cache", path
         assert "cache-control" not in client.get("/_next/static/x.js").headers
+        assert client.get("/index.txt").headers.get("cache-control") == "no-cache"
     with TestClient(create_app(make_settings(tmp_path, tmp_path / "absent"), WalkerTracker)) as client:
         assert client.get("/").headers.get("cache-control") == "no-cache"
