@@ -158,7 +158,8 @@ and prediction columns), `ZoneEventWriter` (zone events only), `WaitsWriter`,
 
 ### Command-line programs
 * `run_tracking.py`: flags are listed in the README. `RunOptions` and
-  `process_video()` consume `iter_frame_results()`. The report adds
+  `process_video()` runs `iter_source_frames` → `FrameProcessor.process` →
+  `RunWriters` → `record` (`iter_frame_results()` remains for tests). The report adds
   `configuration.{frame_stride, effective_fps, tracker, blur_heads,
   head_fraction, video_codec}` and, with a camera, a `queue` section that
   now also holds `stitching`, `service_point`, `waiting`, `service_rate`,

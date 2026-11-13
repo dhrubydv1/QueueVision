@@ -4,9 +4,12 @@ Every step below uses only features that are covered by an automated test or
 listed in [testing_report.md](testing_report.md). The text in quotes is the text
 on screen (taken from the dashboard components).
 
-**Status of the real-browser check: PENDING.** The steps were exercised by the
+**Status of the real-browser check: PENDING.** Steps 1 to 4 were exercised by the
 automated Playwright tests (Chromium and WebKit; the last run, 2026-11-13,
-passed 14/14, 7 per browser, see [testing_report.md](testing_report.md)). No
+passed 14/14, 7 per browser, see [testing_report.md](testing_report.md)). Step 5 (the Accuracy page
+details) and the tab arrow keys are covered by Vitest (`AccuracyView.test.tsx`,
+`RunDetail.test.tsx`), not Playwright; Playwright opens `/accuracy` only in the
+phone check, with synthetic data. No
 person has yet walked through this script in real Chrome, real Safari or on a
 phone; the checklist for that is at the top of the testing report. Run this
 script once yourself before presenting it, and note anything that differs.
@@ -19,10 +22,13 @@ script once yourself before presenting it, and note anything that differs.
 2. Open `http://127.0.0.1:8000`.
 3. Have a clip ready. **Use `datasets/raw/cad_seq27.mp4` with the camera
    `cad_seq27`.** A congestion alert appears reliably only on this clip: in the
-   Sprint 8 end-to-end test `cad_seq27` produced a `congestion_start` about 17 s
+   end-to-end test added in the structure fix pass, `cad_seq27` produced a `congestion_start` about 17 s
    into the video, and `cad_seq25` produced none. If you use `cad_seq25` the
    Acknowledge step cannot be shown. The clips are not committed to Git
    (no licence is stated for them), so they must already be on the machine.
+   At the form's default stride 1 processing is slower than the video and pacing
+   never waits, so the run takes longer than the clip's ~17 s (plus model load
+   on the first run); see [testing_report.md](testing_report.md).
 
 ## 1. Overview (30 s)
 

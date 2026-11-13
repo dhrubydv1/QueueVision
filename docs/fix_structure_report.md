@@ -25,7 +25,7 @@ OpenAPI path order. Layout and include order: [architecture.md](architecture.md)
 `run_tracking.py`, and `iter_source_frames` / `track_frame` in `pipeline.py`. `process_video`, its CLI, flags
 and outputs are unchanged. `tests/test_frame_processor_golden.py` runs the old code (copied verbatim from
 `68001b8` into the test) and the new code on a synthetic clip with a camera config (queue CSVs, events, waits,
-alerts, MOT, stitch diagnostics) and on a plain stride-2 run, and compares every file byte for byte (video by
+alerts, MOT; the stitch-diagnostics file is empty in this scenario, so it is compared but not exercised) and on a plain stride-2 run, and compares every file byte for byte (video by
 decoded frame hash). Five temporary mutations each made it fail.
 
 **Task 3 (1c, backend).** `MIGRATIONS` in `api/db.py` (list in [architecture.md](architecture.md)), backup
@@ -70,14 +70,19 @@ fields, default null); schema version 2. The `dashboard/openapi.json` diff again
 and 0 deletions (those fields and the ack path). All other routes, `/ws` messages, event schema 1.0, CLI outputs
 and queue defaults are unchanged.
 
+Final-fix wave: the SQLite busy timeout was raised from 5 s to 30 s (`api/db.py`, `BUSY_TIMEOUT_S`) in the
+migration-safety work, and `JobManager.start()` now waits `BUSY_TIMEOUT_S + 15` s for the worker instead of a
+fixed 30 s so a worker blocked on a lock is not declared failed. `init_db` raises a clear error for a database
+whose schema version is newer than the code supports.
+
 ## Baselines vs final
 
 Baselines from `b5bb0f9`; final run at the end of this session on this branch.
 
 | Command | Baseline | Final |
 |---|---|---|
-| `.venv/bin/pytest -q` | 454 passed | 469 passed |
-| `.venv/bin/pytest -q -m "not integration"` | 443 passed, 11 deselected | 458 passed, 11 deselected |
+| `.venv/bin/pytest -q` | 454 passed | 472 passed |
+| `.venv/bin/pytest -q -m "not integration"` | 443 passed, 11 deselected | 461 passed, 11 deselected |
 | `.venv/bin/ruff check .` | clean | clean |
 | `.venv/bin/ruff format --check .` | clean | clean (135 files already formatted) |
 | `npm run lint` | clean | clean |
@@ -86,7 +91,7 @@ Baselines from `b5bb0f9`; final run at the end of this session on this branch.
 | `npm run build` | succeeded | succeeded |
 | `npm run e2e` | 12/12 | 14/14 (Chromium 7, WebKit 7), run by Task 4 at `20ef938`; not re-run at the end of Task 5 because only documentation changed |
 
-Python increase: 13 (Task 3) + 4 (Task 2) + 2 (race fix) = 15. Vitest increase: 8 (Task 4).
+Python increase: 15 new tests counted from `def test_` additions per commit: 4 in Task 2 (`29d1d74`: 2 golden, 2 FrameProcessor), 9 in Task 3 (`3742b3e`: 3 in `test_api.py`, 6 in `test_api_db.py`), 2 in the race fix (`f8771e8`); the final-fix wave adds 3 more (18 total). Vitest increase: 8 (Task 4).
 
 ## Measurements
 

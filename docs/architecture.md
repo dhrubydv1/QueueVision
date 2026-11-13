@@ -6,7 +6,7 @@
  source (file / webcam)
         │
  ┌──────▼──────┐  frames   ┌─────────────────────────────────────────────┐
- │ VideoLoader │──────────►│ pipeline.iter_frame_results()  (generator)  │
+ │ VideoLoader │──────────►│ pipeline.iter_source_frames → track_frame   │
  │  (OpenCV)   │ skip()    │                                             │
  └─────────────┘           │  PersonTracker ── PersonDetector (YOLO/CoreML)
                            │   ByteTrack settings from TrackerSettings   │
@@ -17,7 +17,8 @@
                            └──────────────────┬──────────────────────────┘
                                               │ FrameResult
           ┌───────────────────────────────────┴──────────────────────────────────┐
-          │ run_tracking.process_video (one consumer; the Sprint 4 API runs it too)    │
+          │ run_tracking.process_video: iter_source_frames → FrameProcessor.process   │
+          │   → RunWriters → record (the Sprint 4 API runs it too)                │
           │  blur_heads → draw zone / service point → draw_people                 │
           │  → draw_alert_banner (when active) → draw_metrics_panel               │
           │  → VideoWriter → ffmpeg H.264                                         │
@@ -168,7 +169,9 @@ file is named by content hash in `<tmp>/queuevision/trackers/`.
 
 ### Pipeline (`ai_engine/pipeline.py`)
 `iter_frame_results(loader, tracker, queue_analyzer, frame_stride, max_frames)`
-skips, decodes, tracks, runs the analyzer and yields `FrameResult`. It does no
+is kept as a compatibility generator (used by tests): it skips, decodes,
+tracks, runs the analyzer and yields `FrameResult`; `process_video` does not
+use it. It does no
 drawing, writing or timing aggregation. It is built from two parts:
 `iter_source_frames(loader, frame_stride, max_frames)` (the file side: stride
 skipping, timestamps, `started_at`) and `track_frame(...)` (tracker plus
@@ -242,8 +245,8 @@ camera. Zones are drawn with `ai_engine/tools/draw_zone.py`
 `--points`, `--preview`, `--camera-id`, `--frame-index`; see the README, section 10).
 
 ### Command line (`ai_engine/run_tracking.py`)
-`process_video(source, tracker, RunOptions)` is the one consumer of the
-generator that writes files; `main()` parses flags and maps known errors to
+`process_video(source, tracker, RunOptions)` is the one path that writes files:
+`iter_source_frames` → `FrameProcessor.process` → `RunWriters` → `record`; `main()` parses flags and maps known errors to
 exit code 1.
 
 ## API layer (`api/`, Sprint 4)
@@ -520,8 +523,9 @@ config  ◄── detection/types ◄── queue/*  ◄── pipeline ◄─�
 * **Sprint 4 (done; see [api.md](api.md))** runs `process_video` with its
   `on_frame` hook, so the API gets the annotated video and every CLI output as
   well as live numbers. The notes below were the plan and still apply to a
-  future live-camera source: iterate `iter_frame_results()`
-  directly (a live `VideoLoader` source already exists) and serialize
+  future live-camera source: build on `FrameProcessor` with
+  `pipeline.iter_source_frames` / `track_frame` (a live `VideoLoader` source
+  already exists) and serialize
   `FrameResult` fields, `PersonDetection.to_dict()` and each event's
   `to_dict()`; the contract is [event_schema.md](event_schema.md) (schema
   version 1.0, with suggested SQLite tables). Scope every `track_id` and
