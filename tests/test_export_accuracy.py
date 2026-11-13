@@ -203,6 +203,7 @@ def test_waiting_time_absent_then_present(tmp_path: Path) -> None:
     assert wt["per_clip"] == [
         {
             "clip": "cad_seq25",
+            "kind": "predicted",
             "source": "outputs/metrics/cad_seq25_wait_eval.json",
             "metrics": {"waits": {"matched": 4, "wait_mae_s": 2.5, "wait_bias_s": -1.0}},
         }
@@ -210,6 +211,35 @@ def test_waiting_time_absent_then_present(tmp_path: Path) -> None:
     assert wt["pooled"] is None
     assert all(m["section"] != "waiting_time" for m in out["missing_sources"])
     assert "Waiting-time accuracy is not measured yet" not in out["limits"]
+
+
+def test_wait_eval_kinds_and_suffix_stripping(tmp_path: Path) -> None:
+    outputs, splits = make_sources(tmp_path)
+    write(outputs / "metrics" / "cad_a_wait_eval.json", {"metrics": {"waits": {"matched": 1}}})
+    write(outputs / "metrics" / "cad_a_observed_wait_eval.json", {"metrics": {"measured": {"samples": 2}}})
+    write(outputs / "metrics" / "cad_b_observed_wait_eval.json", {"metrics": {"measured": {"samples": 3}}})
+    clips = build_accuracy(outputs, splits, NOW)["waiting_time"]["per_clip"]
+    assert [(c["clip"], c["kind"], c["source"]) for c in clips] == [
+        ("cad_a", "observed", "outputs/metrics/cad_a_observed_wait_eval.json"),
+        ("cad_a", "predicted", "outputs/metrics/cad_a_wait_eval.json"),
+        ("cad_b", "observed", "outputs/metrics/cad_b_observed_wait_eval.json"),
+    ]
+    assert not any(c["clip"].endswith("_observed") for c in clips)
+
+
+def test_unreadable_wait_eval_reported(tmp_path: Path) -> None:
+    outputs, splits = make_sources(tmp_path)
+    write(outputs / "metrics" / "cad_a_wait_eval.json", {"metrics": {"waits": {}}})
+    (outputs / "metrics" / "bad_wait_eval.json").write_text("{not json")
+    write(outputs / "metrics" / "nometrics_observed_wait_eval.json", {"other": 1})
+    out = build_accuracy(outputs, splits, NOW)
+    assert [c["clip"] for c in out["waiting_time"]["per_clip"]] == ["cad_a"]
+    reported = {m["path"]: m for m in out["missing_sources"] if m["section"] == "waiting_time"}
+    assert set(reported) == {
+        "outputs/metrics/bad_wait_eval.json",
+        "outputs/metrics/nometrics_observed_wait_eval.json",
+    }
+    assert all(m["reason"] for m in reported.values())
 
 
 def test_no_typed_numbers(tmp_path: Path) -> None:

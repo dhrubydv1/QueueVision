@@ -204,23 +204,34 @@ def _changes(outputs: Path, missing: list[dict]) -> list[dict] | None:
     return entries or None
 
 
-def _waiting_time(outputs: Path) -> dict | None:
-    files = sorted((outputs / "metrics").glob("*_wait_eval.json"))
+def _waiting_time(outputs: Path, missing: list[dict]) -> dict | None:
+    """Group wait-eval files by clip; ``kind`` is predicted (``_wait_eval``) or observed.
+
+    Unreadable or malformed files are reported in ``missing`` rather than skipped.
+    """
     per_clip, pooled = [], {}
-    for path in files:
+    for path in (outputs / "metrics").glob("*_wait_eval.json"):
+        stem = path.name.removesuffix("_wait_eval.json")
+        observed = stem.endswith("_observed")
+        clip = stem.removesuffix("_observed") if observed else stem
+        kind = "observed" if observed else "predicted"
+        source = f"outputs/metrics/{path.name}"
         try:
             data = json.loads(path.read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError) as error:
+            missing.append({"section": "waiting_time", "path": source, "reason": f"unreadable: {error}"})
             continue
         if not isinstance(data, dict) or "metrics" not in data:
+            missing.append(
+                {"section": "waiting_time", "path": source, "reason": "unexpected layout: no metrics"}
+            )
             continue
-        clip = path.name.removesuffix("_wait_eval.json")
-        source = f"outputs/metrics/{path.name}"
-        per_clip.append({"clip": clip, "source": source, "metrics": data["metrics"]})
+        per_clip.append({"clip": clip, "kind": kind, "source": source, "metrics": data["metrics"]})
         if "pooled" in data:
-            pooled[clip] = data["pooled"]
+            pooled[f"{clip}_observed" if observed else clip] = data["pooled"]
     if not per_clip:
         return None
+    per_clip.sort(key=lambda entry: (entry["clip"], entry["kind"]))
     return {"source": WAIT_GLOB, "per_clip": per_clip, "pooled": pooled or None}
 
 
@@ -239,7 +250,7 @@ def build_accuracy(outputs_dir: Path, splits_dir: Path, now: datetime) -> dict:
     queue_length = section("queue_length", QUEUE_640, lambda: _queue_length(outputs_dir, splits))
     count_errors = section("count_errors", ERRORS_640, lambda: _count_errors(outputs_dir))
     changes = _changes(outputs_dir, missing)
-    waiting = _waiting_time(outputs_dir)
+    waiting = _waiting_time(outputs_dir, missing)
     if waiting is None:
         missing.append(
             {"section": "waiting_time", "path": WAIT_GLOB, "reason": "not measured yet (session 3)"}
