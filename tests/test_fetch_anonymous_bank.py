@@ -3,6 +3,7 @@
 import hashlib
 import zipfile
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -85,3 +86,87 @@ def test_zip_extracted_and_slip_rejected(tmp_path):
         with pytest.raises(fab.FetchError, match="unsafe"):
             fab.safe_extract_zip(bad, tmp_path / "out")
     assert not (tmp_path / "evil.txt").exists()
+
+
+def test_failed_extraction_is_retried(tmp_path, monkeypatch):
+    good = tmp_path / "good.zip"
+    _zip(good, {"January.txt": b"row\n"})
+
+    def fake(url, dest):
+        dest.write_bytes(good.read_bytes())
+
+    items = [fab.Item("bern", "January.txt_ger.zip", "https://x/j.zip")]
+    man = tmp_path / "m.csv"
+    real = fab.safe_extract_zip
+
+    def failing(zp, out):
+        out.mkdir(parents=True)
+        (out / "partial.txt").write_bytes(b"p")
+        raise fab.FetchError("boom")
+
+    monkeypatch.setattr(fab, "safe_extract_zip", failing)
+    with pytest.raises(fab.FetchError, match="boom"):
+        fab.fetch_all(tmp_path / "raw", man, fake, items, log=lambda m: None)
+    assert not (tmp_path / "raw/bern/extracted.tmp").exists()
+    assert not (tmp_path / "raw/bern/extracted/partial.txt").exists()
+    monkeypatch.setattr(fab, "safe_extract_zip", real)
+    fab.fetch_all(tmp_path / "raw", man, fake, items, log=lambda m: None)
+    assert (tmp_path / "raw/bern/extracted/January.txt").exists()
+
+
+def test_extraction_retried_without_redownload(tmp_path):
+    good = tmp_path / "good.zip"
+    _zip(good, {"a.txt": b"x"})
+    calls = []
+
+    def fake(url, dest):
+        calls.append(url)
+        dest.write_bytes(good.read_bytes())
+
+    items = [fab.Item("bern", "a.zip", "https://x/a.zip")]
+    man = tmp_path / "m.csv"
+    fab.fetch_all(tmp_path / "raw", man, fake, items, log=lambda m: None)
+    for f in (tmp_path / "raw/bern/extracted").iterdir():
+        f.unlink()
+    (tmp_path / "raw/bern/.extracted_a.zip").unlink()
+    fab.fetch_all(tmp_path / "raw", man, fake, items, log=lambda m: None)
+    assert len(calls) == 1
+    assert (tmp_path / "raw/bern/extracted/a.txt").exists()
+
+
+def test_pinned_mismatch_leaves_no_file(tmp_path):
+    def fake(url, dest):
+        dest.write_bytes(b"other")
+
+    items = [fab.Item("technion", "a.pdf", "https://x/a.pdf", "0" * 64)]
+    with pytest.raises(fab.FetchError):
+        fab.fetch_all(tmp_path / "raw", tmp_path / "m.csv", fake, items, log=lambda m: None)
+    assert list((tmp_path / "raw/technion").iterdir()) == []
+
+
+def test_short_read_raises(tmp_path, monkeypatch):
+    class Resp:
+        headers: ClassVar[dict[str, str]] = {"Content-Length": "10"}
+
+        def __init__(self):
+            self._d = [b"abc", b""]
+
+        def read(self, n=-1):
+            return self._d.pop(0)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(fab.urllib.request, "urlopen", lambda *a, **k: Resp())
+    dest = tmp_path / "f.zip"
+    with pytest.raises(fab.FetchError, match="short read"):
+        fab.http_download("https://x/f.zip", dest)
+    assert not dest.exists()
+    assert not (tmp_path / "f.zip.part").exists()
+
+
+def test_bern_items_pinned():
+    assert all(i.expected_sha256 for i in fab.ITEMS)

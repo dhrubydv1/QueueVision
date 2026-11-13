@@ -52,6 +52,23 @@ _BERN = [
 ]
 
 
+BERN_SHA256 = {
+    "April.txt_ger.zip": ("bb5dfa84489c0ad970e056b5dbd8a12933b884e89e404a2d8192e2599d7ebc6d"),
+    "August.txt_ger.zip": ("4e559a2a5baccd069a2ac599efe0caa151eb9b9870bdfe9821bb60fd12588292"),
+    "December.txt_ger.zip": ("918fbee41c2fbbb74ea9c80db00c88dd4d2e4cc201905a347b1624ec27b7b691"),
+    "Documentation_ger.pdf": ("77816db694fdee313a7d612e22199d87632ddca5a82f17c3258bd6799ff6e045"),
+    "February.txt_ger.zip": ("eabc2129d38499fa758407b186a869bd8df19c860709bf5cb4dac08f87d0e474"),
+    "January.txt_ger.zip": ("a9529831d80bca9d28b8518c8ba84753505832b220af8a423dd33702808f3541"),
+    "July.txt_ger.zip": ("4b6d0a92bc789e395001f413f37643e43eabc81b222ab3c118576315cef82c34"),
+    "June.txt_ger.zip": ("9a1fd1e99942887fc6e458e1240962e82814b6832219bd2592fe2fe16ae504e7"),
+    "March.txt_ger.zip": ("7ff75b5c575d74de9cbcdfc60707ac244e037488d46746a518c6b0e818503e03"),
+    "May.txt_ger.zip": ("201d1daed1437593712c50773fcc55331c0a4741a2cd32e29c969cec97360c5b"),
+    "November.txt_ger.zip": ("4414687dcbd206fdb94a9fe878186ba0f1d44ee240650c37f0780c89db1ad15c"),
+    "October.txt_ger.zip": ("1cb6d018d8b3624aa70b93756209047965be2d3f11d07150336f9ef06adb0eca"),
+    "September.txt_ger.zip": ("068a05d0f4498dbd7cba4bf98968581ab6437de50e37bbcf48f5ae261813df06"),
+}
+
+
 @dataclass(frozen=True)
 class Item:
     source: str  # "technion" | "bern"
@@ -73,7 +90,7 @@ ITEMS: list[Item] = [
         TECHNION_BASE + "AnonymousBank.pdf",
         "77816db694fdee313a7d612e22199d87632ddca5a82f17c3258bd6799ff6e045",
     ),
-] + [Item("bern", n, f"{BERN_HOST}{BERN_PREFIX}{d}/{n}") for n, d in _BERN]
+] + [Item("bern", n, f"{BERN_HOST}{BERN_PREFIX}{d}/{n}", BERN_SHA256[n]) for n, d in _BERN]
 
 Downloader = Callable[[str, Path], None]
 
@@ -83,15 +100,25 @@ class FetchError(RuntimeError):
 
 
 def http_download(url: str, dest: Path) -> None:
-    """Stream ``url`` to ``dest`` via a ``.part`` file, then rename."""
+    """Stream ``url`` to ``dest`` via a ``.part`` file, then rename.
+
+    Raises FetchError on network errors or a short read (Content-Length check).
+    """
     part = dest.with_name(dest.name + ".part")
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=60) as resp, part.open("wb") as fh:
+            expected = resp.headers.get("Content-Length")
             shutil.copyfileobj(resp, fh, 1 << 20)
+        written = part.stat().st_size
+        if expected is not None and int(expected) != written:
+            raise FetchError(f"short read for {url}: got {written} of {expected} bytes")
     except OSError as exc:  # URLError/HTTPError are OSError subclasses
         part.unlink(missing_ok=True)
         raise FetchError(f"download failed for {url}: {exc}") from exc
+    except FetchError:
+        part.unlink(missing_ok=True)
+        raise
     part.replace(dest)
 
 
@@ -121,14 +148,21 @@ def write_manifest(path: Path, rows: dict[str, dict[str, str]]) -> None:
 
 def safe_extract_zip(zip_path: Path, out_dir: Path) -> list[str]:
     """Extract a zip, rejecting absolute paths and ``..`` components (zip-slip)."""
-    with zipfile.ZipFile(zip_path) as zf:
+    try:
+        zf = zipfile.ZipFile(zip_path)
+    except zipfile.BadZipFile as exc:
+        raise FetchError(f"{zip_path.name} is not a valid zip: {exc}") from exc
+    with zf:
         for info in zf.infolist():
             name = info.filename
             p = PurePosixPath(name.replace("\\", "/"))
             if p.is_absolute() or ".." in p.parts or (len(name) > 1 and name[1] == ":"):
                 raise FetchError(f"unsafe path in {zip_path.name}: {name!r}")
         out_dir.mkdir(parents=True, exist_ok=True)
-        zf.extractall(out_dir)
+        try:
+            zf.extractall(out_dir)
+        except (zipfile.BadZipFile, OSError) as exc:
+            raise FetchError(f"extraction of {zip_path.name} failed: {exc}") from exc
         return [i.filename for i in zf.infolist()]
 
 
@@ -141,6 +175,19 @@ def extract_rar(rar_path: Path, out_dir: Path) -> None:
         raise FetchError(
             f"bsdtar failed on {rar_path.name}: {exc} {detail.decode(errors='replace')}"
         ) from exc
+
+
+def merge_dir(src: Path, dst: Path) -> None:
+    """Move the contents of ``src`` into ``dst`` (created if needed), replacing same-named files."""
+    dst.mkdir(parents=True, exist_ok=True)
+    for child in src.iterdir():
+        target = dst / child.name
+        if target.is_dir() and child.is_dir():
+            merge_dir(child, target)
+        else:
+            if target.is_dir():
+                shutil.rmtree(target)
+            child.replace(target)
 
 
 def fetch_all(
@@ -157,20 +204,27 @@ def fetch_all(
         dest = raw_dir / item.source / item.name
         key = dest.relative_to(raw_dir).as_posix()
         known = rows.get(key, {}).get("sha256") or item.expected_sha256
-        fresh = False
+        marker = dest.with_name(f".extracted_{item.name}")
         if dest.exists() and known and sha256_of(dest) == known:
             digest = known
             log(f"skip (hash matches): {key}")
         else:
             dest.parent.mkdir(parents=True, exist_ok=True)
             log(f"download: {item.url}")
-            downloader(item.url, dest)
-            digest = sha256_of(dest)
-            fresh = True
-            if item.expected_sha256 and digest != item.expected_sha256:
-                raise FetchError(
-                    f"SHA-256 mismatch for {item.name}: got {digest}, expected {item.expected_sha256}"
-                )
+            staged = dest.with_name(item.name + ".dl")
+            staged.unlink(missing_ok=True)
+            try:
+                downloader(item.url, staged)
+                digest = sha256_of(staged)
+                if item.expected_sha256 and digest != item.expected_sha256:
+                    raise FetchError(
+                        f"SHA-256 mismatch for {item.name}: got {digest}, expected {item.expected_sha256}"
+                    )
+            except BaseException:
+                staged.unlink(missing_ok=True)
+                raise
+            staged.replace(dest)
+            marker.unlink(missing_ok=True)
         rows[key] = {
             "source": item.source,
             "name": item.name,
@@ -180,11 +234,17 @@ def fetch_all(
             "sha256": digest,
         }
         write_manifest(manifest_path, rows)
-        if extract and item.name.endswith((".rar", ".zip")):
+        if extract and item.name.endswith((".rar", ".zip")) and not marker.exists():
             out = dest.parent / "extracted"
-            if fresh or not out.exists():
-                log(f"extract: {key} -> {out}")
-                (extract_rar if item.name.endswith(".rar") else safe_extract_zip)(dest, out)
+            tmp = dest.parent / "extracted.tmp"
+            shutil.rmtree(tmp, ignore_errors=True)
+            log(f"extract: {key} -> {out}")
+            try:
+                (extract_rar if item.name.endswith(".rar") else safe_extract_zip)(dest, tmp)
+                merge_dir(tmp, out)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+            marker.write_text(digest + "\n", encoding="utf-8")
     return rows
 
 
