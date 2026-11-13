@@ -27,8 +27,11 @@ def is_loopback(host: str) -> bool:
 
 
 def parse_origins(raw: str) -> tuple[str, ...]:
-    """Split a comma-separated origin list: trim items, strip trailing ``/``, drop empties."""
-    items = (item.strip().rstrip("/") for item in raw.split(","))
+    """Split a comma-separated origin list: trim, strip trailing ``/``, lower-case, drop empties.
+
+    ``","`` therefore gives an empty tuple, i.e. an allowlist that rejects every browser origin.
+    """
+    items = (item.strip().rstrip("/").lower() for item in raw.split(","))
     return tuple(item for item in items if item)
 
 
@@ -82,11 +85,16 @@ class ApiSettings:
     def effective_allowed_origins(self) -> frozenset[str]:
         """Origins a browser may open the live WebSocket from (exact scheme://host[:port])."""
         if self.allowed_origins is not None:
-            return frozenset(self.allowed_origins)
-        origins = {f"http://{self.host}:{self.port}", "http://localhost:3000", "http://127.0.0.1:3000"}
+            return frozenset(origin.lower() for origin in self.allowed_origins)
+        host = f"[{self.host}]" if ":" in self.host and not self.host.startswith("[") else self.host
+        origins = {f"http://{host}:{self.port}", "http://localhost:3000", "http://127.0.0.1:3000"}
         if is_loopback(self.host):
             origins.add(f"http://localhost:{self.port}")
-        return frozenset(origins)
+        return frozenset(origin.lower() for origin in origins)
+
+    def origin_allowed(self, origin: str) -> bool:
+        """True when ``origin`` is allowed; scheme and host compare case-insensitively, port exactly."""
+        return origin.strip().lower() in self.effective_allowed_origins()
 
     @classmethod
     def from_env(cls) -> ApiSettings:

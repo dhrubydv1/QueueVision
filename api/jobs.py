@@ -207,9 +207,9 @@ class JobManager:
 
     def stop(self, timeout: float = 30.0) -> None:
         """Ask the worker to stop; the current job ends ``cancelled``."""
-        self._stop.set()
-        self._interrupt.set()
         with self._cond:
+            self._stop.set()
+            self._interrupt.set()
             self._cond.notify_all()
         if self._thread is not None:
             self._thread.join(timeout)

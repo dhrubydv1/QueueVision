@@ -102,6 +102,23 @@ def _safe_file(root: Path, relative: str) -> Path | None:
     return None
 
 
+def _contained(settings: ApiSettings, name: str | None) -> Path | None:
+    """The existing regular file ``name`` if it resolves under the data dir, else None (warns on escape)."""
+    if not name:
+        return None
+    try:
+        resolved = Path(name).resolve()
+        if not resolved.is_relative_to(settings.data_dir.resolve()):
+            LOGGER.warning("report path %s is outside the data directory; not serving it", name)
+            return None
+        return resolved if resolved.is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
+NO_CACHE = {"Cache-Control": "no-cache"}
+
+
 def _media_type(path: Path) -> str | None:
     return "text/javascript" if path.suffix == ".js" else None
 
@@ -316,8 +333,9 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
     @app.get("/api/videos/{video_id}/video")
     def video(video_id: VideoId) -> FileResponse:
         record = get_record(video_id)
-        path = Path(((record["report"] or {}).get("outputs") or {}).get("video", ""))
-        if record["status"] != "completed" or not path.is_file():
+        name = ((record["report"] or {}).get("outputs") or {}).get("video")
+        path = _contained(settings, name)
+        if record["status"] != "completed" or path is None:
             raise HTTPException(404, "annotated video not available")
         return FileResponse(path, media_type="video/mp4")  # Starlette answers Range requests with 206
 
@@ -325,8 +343,8 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
     def timeseries_csv(video_id: VideoId) -> FileResponse:
         record = get_record(video_id)
         name = ((record["report"] or {}).get("outputs") or {}).get("timeseries")
-        path = Path(name) if name else None
-        if path is None or not path.is_file():
+        path = _contained(settings, name)
+        if path is None:
             raise HTTPException(404, "time series not available")
         return FileResponse(path, media_type="text/csv", filename=f"run{video_id}_timeseries.csv")
 
@@ -393,7 +411,7 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
     @app.websocket("/ws/videos/{video_id}")
     async def live(websocket: WebSocket, video_id: VideoId) -> None:
         origin = websocket.headers.get("origin")
-        if origin is not None and origin not in settings.effective_allowed_origins():
+        if origin is not None and not settings.origin_allowed(origin):
             await websocket.close(code=1008)  # policy violation: refused before the handshake completes
             return
         await websocket.accept()
@@ -462,8 +480,10 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
         app.mount("/legacy", StaticFiles(directory=static_dir, html=True), name="legacy")
 
     @app.get("/legacy", include_in_schema=False)
-    def legacy_redirect() -> RedirectResponse:
-        return RedirectResponse("/legacy/", status_code=307)
+    @app.head("/legacy", include_in_schema=False)
+    def legacy_redirect(request: Request) -> RedirectResponse:
+        query = request.url.query
+        return RedirectResponse("/legacy/" + (f"?{query}" if query else ""), status_code=307)
 
     dashboard_dir = settings.dashboard_dir
 
@@ -472,16 +492,17 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
         if path in ("api", "ws") or path.startswith(("api/", "ws/")):
             return JSONResponse({"detail": "Not Found"}, status_code=404)
         if not dashboard_dir.is_dir():
-            return HTMLResponse(DASHBOARD_NOT_BUILT_HTML)
+            return HTMLResponse(DASHBOARD_NOT_BUILT_HTML, headers=NO_CACHE)
         root = dashboard_dir.resolve()
         candidates = (path, f"{path}.html", f"{path}/index.html") if path else ("index.html",)
         for candidate in candidates:
             found = _safe_file(root, candidate)
             if found is not None:
-                return FileResponse(found, media_type=_media_type(found))
+                headers = NO_CACHE if found.suffix == ".html" else None
+                return FileResponse(found, media_type=_media_type(found), headers=headers)
         not_found = _safe_file(root, "404.html")
         if not_found is not None:
-            return FileResponse(not_found, status_code=404, media_type="text/html")
+            return FileResponse(not_found, status_code=404, media_type="text/html", headers=NO_CACHE)
         return JSONResponse({"detail": "Not Found"}, status_code=404)
 
     return app

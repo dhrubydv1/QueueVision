@@ -78,3 +78,20 @@ def test_legacy_without_slash_redirects(tmp_path: Path, export_dir: Path) -> Non
             response = client.get("/legacy", follow_redirects=True)
             assert response.status_code == 200 and "QueueVision" in response.text
             assert "INDEX-PAGE" not in response.text and "NOT-FOUND-PAGE" not in response.text
+
+
+def test_legacy_redirect_keeps_query_and_head(tmp_path: Path, export_dir: Path) -> None:
+    with TestClient(create_app(make_settings(tmp_path, export_dir), WalkerTracker)) as client:
+        got = client.get("/legacy?x=1", follow_redirects=False)
+        assert got.status_code == 307 and got.headers["location"] == "/legacy/?x=1"
+        head = client.head("/legacy", follow_redirects=False)
+        assert head.status_code == 307 and head.headers["location"] == "/legacy/"
+
+
+def test_dashboard_html_not_cached_static_assets_cached(tmp_path: Path, export_dir: Path) -> None:
+    with TestClient(create_app(make_settings(tmp_path, export_dir), WalkerTracker)) as client:
+        for path in ("/", "/live", "/live.html", "/index.html", "/nope", "/404.html"):
+            assert client.get(path).headers.get("cache-control") == "no-cache", path
+        assert "cache-control" not in client.get("/_next/static/x.js").headers
+    with TestClient(create_app(make_settings(tmp_path, tmp_path / "absent"), WalkerTracker)) as client:
+        assert client.get("/").headers.get("cache-control") == "no-cache"
