@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+@theme {
+  --color-page: #f4f5f7;
+  --color-surface: #ffffff;
+  --color-border: #e4e7ec;
+  --color-border-input: #d0d5dd;
+  --color-text: #101828;
+  --color-text-2: #475467;
+  --color-text-3: #667085;
+  --color-primary: #1f4fd1;
+  --color-primary-hover: #163a9c;
+  --color-primary-soft: #e8eefc;
+  --color-warn: #b54708;
+  --color-warn-soft: #fef0e3;
+  --color-warn-border: #f7b27a;
+  --color-warn-text: #7a2e0b;
+  --color-ok: #067647;
+  --color-ok-soft: #e7f6ec;
+  --color-chip: #f2f4f7;
+  --color-danger: #b42318;
+  --color-bar-val: #84adff;
+  --color-bar-test: #1f4fd1;
+
+  --radius-card: 12px;
+  --radius-control: 8px;
+  --radius-chip: 9999px;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-space-grotesk), var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  --container-content: 1360px;
+}
+
+html {
+  background: var(--color-page);
+}
+
+body {
+  background: var(--color-page);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Numbers use tabular figures so values do not jitter as they update. */
+.num,
+table,
+time,
+[data-numeric] {
+  font-variant-numeric: tabular-nums;
+}

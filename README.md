@@ -109,6 +109,7 @@ crowd, so it must be validated on real queue footage before its results are trus
 | Evaluation | motmetrics 1.4.0, SciPy 1.17.1 |
 | Outputs | JSON and CSV (standard library) |
 | Testing / lint | pytest 9.2.0, ruff 0.17.3 |
+| Dashboard | Next.js 16.4.3, React 19.3.1, Tailwind 4.3.3, TanStack Query 5.105.0, Recharts 3.10.1 on Node v22.23.2 (full list in [section 9c](#9c-dashboard-sprint-7)) |
 
 ## 4. Architecture
 
@@ -291,6 +292,89 @@ binds to 127.0.0.1 by default and has no authentication, so keep it local.
 Everything the server stores is local: uploads, outputs and the SQLite
 database are under `data/` (git-ignored; override with `QUEUEVISION_DATA_DIR`).
 Endpoints, WebSocket messages and settings are in [docs/api.md](docs/api.md).
+
+## 9c. Dashboard (Sprint 7)
+
+The web dashboard lives in `dashboard/` (Next.js, static export). FastAPI serves
+the built export at `/`; the old plain test page is still at `/legacy`. The
+dashboard talks to the API only over HTTP and WebSocket and computes nothing
+itself: every number comes from the API. Pages: Overview (`/`), Live run
+(`/live?id=N`), Recorded runs (`/runs`, `/run?id=N`) and Accuracy (`/accuracy`).
+
+**One-command demo** (needs the Python environment, Node and npm):
+
+```bash
+scripts/demo.sh
+```
+
+It builds the dashboard if `dashboard/out/` is missing (`npm ci` then
+`npm run build`; the only network use, apart from `next/font` downloading fonts at build time), runs `scripts/export_accuracy.py`
+(writes the git-ignored `data/accuracy.json` from evaluation files on disk) and
+starts `python -m api`. Open http://127.0.0.1:8000. If `dashboard/out/` does not
+exist, `/` shows a short message that says how to build it.
+
+**Build by hand:**
+
+```bash
+cd dashboard
+npm ci
+npm run build        # writes dashboard/out/
+cd .. && python scripts/export_accuracy.py && python -m api
+```
+
+**Development mode** (hot reload): run the API on port 8000 and the dev server on 3000.
+
+```bash
+python -m api                       # terminal 1, http://127.0.0.1:8000
+cd dashboard && npm run dev         # terminal 2, http://localhost:3000
+```
+
+In development `next dev` forwards `/api/*` to `http://127.0.0.1:8000`; the
+live WebSocket and the video/preview media connect to port 8000 directly (the
+API accepts the dev origin `http://localhost:3000` by default).
+
+**Dashboard commands** (run in `dashboard/`): `npm run lint`, `npm run
+typecheck`, `npm test` (Vitest), `npm run build`, `npm run e2e` (Playwright
+against the real API; needs `npm run build`, the model weights and
+`datasets/raw/cad_seq25.mp4`, and skips itself when they are missing).
+`npm run gen:api` regenerates `lib/api-types.ts` from the committed
+`dashboard/openapi.json`, which `python scripts/export_openapi.py` rewrites from
+the API; CI fails if either is stale. `npm run gen:api:live` generates from a
+running API on port 8000 instead.
+
+**Pinned versions** (exact, from `dashboard/package.json` and the committed
+`package-lock.json`; Node v22.23.2 and npm 10.9.8 were used):
+
+| Package | Version |
+|---|---|
+| next | 16.4.3 |
+| react, react-dom | 19.3.1 |
+| @tanstack/react-query | 5.105.0 |
+| recharts | 3.10.1 |
+| tailwindcss, @tailwindcss/postcss | 4.3.3 |
+| typescript | 5.9.3 |
+| eslint, eslint-config-next | 9.39.5, 16.4.3 |
+| vitest, vite, @vitejs/plugin-react | 5.0.5, 8.3.5, 6.1.2 |
+| jsdom | 30.1.3 |
+| @testing-library/react, dom, jest-dom, user-event | 16.3.3, 10.4.2, 7.0.1, 14.6.8 |
+| @playwright/test | 1.64.1 |
+| openapi-typescript | 7.13.0 |
+| @types/node, @types/react, @types/react-dom | 22.20.5, 19.3.0, 19.3.0 |
+
+Python dependencies are unchanged. TypeScript 5.9.3 and eslint 9 (not the
+newest majors) are chosen because `openapi-typescript` and `eslint-config-next`
+do not yet accept the newer ones.
+
+**Settings used by the dashboard:**
+
+| Variable | Where | Meaning |
+|---|---|---|
+| `QUEUEVISION_ALLOWED_ORIGINS` | API | Comma-separated browser origins allowed to open the WebSocket (default: the API's own origin and `http://localhost:3000`) |
+| `QUEUEVISION_DASHBOARD_DIR` | API | Folder served at `/` (default `dashboard/out/`) |
+| `NEXT_PUBLIC_API_WS` | dashboard build/dev | WebSocket base (default: `ws://127.0.0.1:8000` on port 3000, else the page's own host) |
+| `NEXT_PUBLIC_API_URL` | dashboard build/dev | HTTP base for API calls and media (default: relative `/api` through the dev rewrite; media on `http://127.0.0.1:8000` from port 3000, else same origin) |
+
+Sprint 7 session 2 report: [docs/sprint7_session2_report.md](docs/sprint7_session2_report.md).
 
 ## 9b. Sprint 5: replay, stitching evaluation, dataset checks, benchmark
 

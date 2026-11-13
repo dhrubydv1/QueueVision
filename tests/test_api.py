@@ -64,6 +64,8 @@ def test_health_and_cameras(settings) -> None:
         cams = {c["id"]: c for c in client.get("/api/cameras").json()}
         assert cams["walker"]["error"] is None and cams["walker"]["has_service_point"] is True
         assert cams["walker"]["alerts_enabled"] is True
+        assert cams["walker"]["max_queue_length"] == 0.5
+        assert cams["walker"]["smoothing_window_s"] == 2.0
         assert cams["broken"]["error"]
 
 
@@ -149,6 +151,38 @@ def test_full_run_results_match_db(settings, clip) -> None:
         assert ranged.status_code == 206 and len(ranged.content) == 100
         assert ranged.headers["content-range"].startswith("bytes 0-99/")
         assert [r["video_id"] for r in client.get("/api/videos").json()] == [video_id]
+
+
+def test_timeseries_csv_download(settings, clip) -> None:
+    with make_client(settings) as client:
+        video_id = upload(client, clip).json()["video_id"]
+        assert wait_status(client, video_id)["status"] == "completed"
+        response = client.get(f"/api/videos/{video_id}/timeseries.csv")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/csv")
+        assert "attachment" in response.headers["content-disposition"]
+        assert f"run{video_id}_timeseries.csv" in response.headers["content-disposition"]
+        assert response.text.splitlines()[0].startswith("time_s,frame")
+        # the run's output file is gone: 404, not a 500
+        conn = db.connect(settings.db_path)
+        try:
+            path = Path(db.get_video(conn, video_id)["report"]["outputs"]["timeseries"])
+        finally:
+            conn.close()
+        path.unlink()
+        missing = client.get(f"/api/videos/{video_id}/timeseries.csv")
+        assert missing.status_code == 404 and missing.json()["detail"] == "time series not available"
+
+
+def test_timeseries_csv_404_without_report(settings, clip) -> None:
+    reached, release = threading.Event(), threading.Event()
+    with make_client(settings, lambda: GatedTracker(reached, release, block_at=2)) as client:
+        video_id = upload(client, clip).json()["video_id"]
+        assert reached.wait(WAIT)
+        assert client.get(f"/api/videos/{video_id}/timeseries.csv").status_code == 404
+        release.set()
+        wait_status(client, video_id)
+        assert client.get("/api/videos/99/timeseries.csv").status_code == 404
 
 
 def test_completed_stride_run_reports_100_percent(settings, clip) -> None:
@@ -284,7 +318,7 @@ def test_cancel_endpoint(settings, clip) -> None:
 
 def test_test_page_is_served_and_offline(settings) -> None:
     with make_client(settings) as client:
-        response = client.get("/")
+        response = client.get("/legacy/")
         assert response.status_code == 200 and "text/html" in response.headers["content-type"]
         for element_id in ("upload-form", "progress", "live-numbers", "events", "player", "runs"):
             assert f'id="{element_id}"' in response.text

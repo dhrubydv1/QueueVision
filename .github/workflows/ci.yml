@@ -20,13 +20,44 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install opencv-python-headless==5.0.0.93 numpy==2.4.6 PyYAML==6.0.3 \
-            fastapi==0.162.0 "uvicorn[standard]==0.54.0" python-multipart==0.0.33 httpx==0.28.1 -r requirements-dev.txt
+            pydantic==2.14.2 fastapi==0.162.0 "uvicorn[standard]==0.54.0" python-multipart==0.0.33 httpx==0.28.1 -r requirements-dev.txt
+      - name: OpenAPI schema is up to date
+        run: |
+          python scripts/export_openapi.py
+          git diff --exit-code dashboard/openapi.json
       - name: Ruff
         run: |
           ruff check .
           ruff format --check .
       - name: Unit tests
         run: pytest -v -m "not integration"
+
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: API types are up to date
+        run: |
+          npm run gen:api
+          git diff --exit-code lib/api-types.ts
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
 
   integration:
     # Downloads yolo11n.pt from GitHub releases at test time; allowed to fail

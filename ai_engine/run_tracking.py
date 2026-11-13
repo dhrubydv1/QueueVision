@@ -46,6 +46,7 @@ import numpy as np
 
 from ai_engine import config
 from ai_engine.detection.detector import ModelLoadError, PersonDetector
+from ai_engine.detection.types import PersonDetection
 from ai_engine.evaluation.mot_eval import MotWriter
 from ai_engine.metrics.performance import PerformanceTracker, save_json
 from ai_engine.metrics.queue_outputs import (
@@ -118,6 +119,10 @@ class FrameUpdate:
     people_in_frame: int
     processing_fps: float  # running average
     queue: QueueFrameState | None
+    # Only set when ``process_video(frame_callback_wants_image=True)``. ``image`` is the drawn frame
+    # that was just written, valid only during the callback (copy it to keep it).
+    image: np.ndarray | None = None
+    people: tuple[PersonDetection, ...] | None = None
 
 
 def model_display_name(model_path: Path) -> str:
@@ -158,12 +163,14 @@ def process_video(
     extra_report: dict[str, Any] | None = None,
     on_frame: Callable[[FrameUpdate], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    frame_callback_wants_image: bool = False,
 ) -> dict[str, Any]:
     """Track people through one video and write the annotated MP4, metrics and CSVs.
 
     ``on_frame`` is called after each processed frame is drawn and written. ``should_stop`` is
     checked after ``on_frame``; returning True ends the run like pressing ``q`` (outputs are
-    still written). Returns the metrics report that was saved to disk.
+    still written). With ``frame_callback_wants_image`` the update also carries the drawn frame and
+    people (see :class:`FrameUpdate`). Returns the metrics report that was saved to disk.
     """
     options = options or RunOptions()
     run_started_at = run_started_at if run_started_at is not None else time.perf_counter()
@@ -300,6 +307,8 @@ def process_video(
                         people_in_frame=len(people),
                         processing_fps=performance.average_processing_fps,
                         queue=queue,
+                        image=frame if frame_callback_wants_image else None,
+                        people=tuple(people) if frame_callback_wants_image else None,
                     )
                 )
             if should_stop and should_stop():

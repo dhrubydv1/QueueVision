@@ -11,6 +11,7 @@ import contextlib
 import logging
 import math
 import threading
+import time
 from collections import deque
 from collections.abc import Callable
 from typing import Any
@@ -21,6 +22,7 @@ from ai_engine import config
 from ai_engine.queue.camera_config import load_camera_config
 from ai_engine.run_tracking import FrameUpdate, RunOptions, process_video
 from api import db
+from api.preview import PreviewStore
 from api.settings import ApiSettings
 
 LOGGER = logging.getLogger("queuevision.api")
@@ -158,9 +160,19 @@ def _put(queue: asyncio.Queue, message: dict) -> None:
 class JobManager:
     """Runs queued videos one at a time on a single worker thread."""
 
-    def __init__(self, settings: ApiSettings, tracker_factory: TrackerFactory) -> None:
+    def __init__(
+        self,
+        settings: ApiSettings,
+        tracker_factory: TrackerFactory,
+        clock: Callable[[], float] = time.monotonic,
+        wait: Callable[[float], object] | None = None,
+    ) -> None:
         self.settings = settings
+        self._clock = clock
+        self._interrupt = threading.Event()  # wakes a real-time pacing wait on cancel/stop
+        self._wait = wait if wait is not None else self._interrupt.wait
         self._factory = tracker_factory
+        self.preview = PreviewStore()
         self._cond = threading.Condition()
         self._pending: deque[int] = deque()
         self._current: int | None = None
@@ -196,6 +208,7 @@ class JobManager:
     def stop(self, timeout: float = 30.0) -> None:
         """Ask the worker to stop; the current job ends ``cancelled``."""
         self._stop.set()
+        self._interrupt.set()
         with self._cond:
             self._cond.notify_all()
         if self._thread is not None:
@@ -217,6 +230,7 @@ class JobManager:
                 queued = True
             elif self._current == video_id:
                 self._cancel_current.set()
+                self._interrupt.set()
                 return True
             else:
                 return False
@@ -230,6 +244,11 @@ class JobManager:
             if record:
                 self._publish(video_id, status_message(video_id, record))
         return True
+
+    @property
+    def stopping(self) -> bool:
+        """True once ``stop()`` was called."""
+        return self._stop.is_set()
 
     def is_active(self, video_id: int) -> bool:
         with self._cond:
@@ -292,6 +311,7 @@ class JobManager:
                         return
                     self._current = self._pending.popleft()
                     self._cancel_current.clear()
+                    self._interrupt.clear()
                 video_id = self._current
                 try:
                     self._process(conn, video_id)
@@ -357,6 +377,8 @@ class JobManager:
         events: list[dict] = []
         rows: list[dict] = []
         state = {"frames": 0, "next_second": 0}  # frames: source frames done
+        realtime = bool(options.get("realtime", False))
+        pacing: dict[str, float] = {}  # "start": clock reading at video time 0
 
         def flush() -> None:
             with conn:  # one transaction for the whole batch
@@ -370,6 +392,11 @@ class JobManager:
 
         def on_frame(update: FrameUpdate) -> None:
             state["frames"] = update.frame_index + 1
+            if update.image is not None:
+                try:
+                    self.preview.offer(video_id, update.image, update.people, self._clock())
+                except Exception:  # the preview is optional: never fail the run over it
+                    LOGGER.exception("preview encode failed for run %s", video_id)
             queue = update.queue
             if queue is not None:
                 for event in queue.events:
@@ -384,20 +411,30 @@ class JobManager:
                 message = progress_message(video_id, update)
                 self._live[video_id] = message
                 self._publish(video_id, message)
+            if realtime:  # pace to video time; a late run never waits, so lag does not build up
+                if "start" not in pacing:
+                    pacing["start"] = self._clock() - update.timestamp_s
+                delay = pacing["start"] + update.timestamp_s - self._clock()
+                if delay > 0:
+                    self._wait(delay)
 
-        report = process_video(
-            source,
-            tracker,
-            RunOptions(
-                output_dir=output_dir,
-                camera=camera,
-                frame_stride=stride,
-                max_frames=options.get("max_frames"),
-                blur_heads=bool(options.get("blur_heads", True)),
-            ),
-            on_frame=on_frame,
-            should_stop=self._should_stop,
-        )
+        try:
+            report = process_video(
+                source,
+                tracker,
+                RunOptions(
+                    output_dir=output_dir,
+                    camera=camera,
+                    frame_stride=stride,
+                    max_frames=options.get("max_frames"),
+                    blur_heads=bool(options.get("blur_heads", True)),
+                ),
+                on_frame=on_frame,
+                should_stop=self._should_stop,
+                frame_callback_wants_image=True,
+            )
+        finally:
+            self.preview.drop(video_id)
         flush()
         stopped = bool(report.get("stopped_early"))  # a cancel after the last frame leaves the run completed
         self._finish(conn, video_id, "cancelled" if stopped else "completed", report=report)

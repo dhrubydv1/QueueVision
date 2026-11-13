@@ -512,3 +512,71 @@ def test_direct_run_does_not_shadow_stdlib_queue(tmp_path: Path) -> None:
     assert "cannot import name" not in completed.stderr
     assert "Video file does not exist" in completed.stderr
     assert completed.returncode == 1
+
+
+def test_frame_update_image_only_when_requested(synthetic_video: Path, tmp_path: Path) -> None:
+    width, height = SYNTHETIC_SIZE
+    default_updates: list[FrameUpdate] = []
+    process_video(
+        synthetic_video,
+        FakeTracker(),
+        RunOptions(output_dir=tmp_path / "a", h264=False),
+        on_frame=default_updates.append,
+    )
+    assert default_updates
+    assert all(u.image is None and u.people is None for u in default_updates)
+
+    shapes: list[tuple[int, ...]] = []
+    boxes: list[tuple] = []
+
+    def on_frame(update: FrameUpdate) -> None:
+        shapes.append(update.image.shape)
+        boxes.append(update.people[0].bbox)
+
+    process_video(
+        synthetic_video,
+        FakeTracker(),
+        RunOptions(output_dir=tmp_path / "b", h264=False),
+        on_frame=on_frame,
+        frame_callback_wants_image=True,
+    )
+    assert shapes and all(shape == (height, width, 3) for shape in shapes)
+    assert all(box == (60, 30, 100, 110) for box in boxes)
+
+
+def test_cli_outputs_identical_with_image_callback(synthetic_video: Path, tmp_path: Path) -> None:
+    from tests.test_api_jobs import CAMERA_YAML
+
+    camera_path = tmp_path / "walker.yaml"
+    camera_path.write_text(CAMERA_YAML)
+    camera = load_camera_config(camera_path)
+    reports = {}
+    for label, wants in (("plain", False), ("image", True)):
+        reports[label] = process_video(
+            synthetic_video,
+            WalkerTracker(),
+            RunOptions(output_dir=tmp_path / label, camera=camera),
+            on_frame=(lambda update: None) if wants else None,
+            frame_callback_wants_image=wants,
+        )
+    paths = {label: output_paths("synthetic", tmp_path / label) for label in reports}
+    for key in ("video", "timeseries", "events", "waits", "alerts", "event_log"):
+        assert paths["plain"][key].read_bytes() == paths["image"][key].read_bytes(), key
+
+    def stable(report: Any) -> Any:
+        if isinstance(report, dict):
+            return {
+                k: stable(v)
+                for k, v in report.items()
+                if k != "generated_at"
+                and k != "outputs"
+                and k not in ("total_runtime_seconds", "total_processing_seconds", "total_inference_seconds")
+                and "fps" not in k.lower()
+            }
+        if isinstance(report, list):
+            return [stable(v) for v in report]
+        return report
+
+    assert stable(reports["plain"]) == stable(reports["image"])
+    saved = [json.loads(paths[label]["metrics"].read_text()) for label in reports]
+    assert stable(saved[0]) == stable(saved[1])

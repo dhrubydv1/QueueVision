@@ -3,22 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import ipaddress
 import logging
+import os
 
-from api.settings import ApiSettings, SettingsError
+from api.settings import ApiSettings, SettingsError, is_loopback
 
 LOGGER = logging.getLogger("queuevision.api")
-
-
-def is_loopback(host: str) -> bool:
-    """True for ``localhost`` and loopback IP addresses; anything else (including 0.0.0.0) is not."""
-    if host.lower() == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host.strip("[]")).is_loopback
-    except ValueError:
-        return False
+GRACEFUL_SHUTDOWN_S = 5  # open MJPEG streams must not block Ctrl+C until the video ends
 
 
 def warn_if_exposed(host: str) -> bool:
@@ -49,8 +40,18 @@ def main(argv: list[str] | None = None) -> None:
 
     logging.basicConfig(level=logging.INFO)
     warn_if_exposed(args.host)
+    # The app builds its settings from the environment (also in --reload children), so the CLI
+    # values must be visible there for the allowed-origins check to match the real address.
+    os.environ["QUEUEVISION_HOST"] = args.host
+    os.environ["QUEUEVISION_PORT"] = str(args.port)
 
-    uvicorn.run("api.main:app", host=args.host, port=args.port, reload=args.reload)
+    uvicorn.run(
+        "api.main:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S,
+    )
 
 
 if __name__ == "__main__":
