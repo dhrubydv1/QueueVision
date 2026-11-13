@@ -60,14 +60,14 @@ Dependency changes: none (`requirements.txt` and `dashboard/package.json` depend
 
 | Command | Baseline (`160dcea`) | Final |
 |---|---|---|
-| `.venv/bin/pytest -q` | 440 passed | 452 passed |
-| `.venv/bin/pytest -q -m "not integration"` | 429 passed, 11 deselected | 441 passed, 11 deselected |
+| `.venv/bin/pytest -q` | 440 passed | 454 passed |
+| `.venv/bin/pytest -q -m "not integration"` | 429 passed, 11 deselected | 443 passed, 11 deselected |
 | `ruff check` / `ruff format --check` | clean | clean (121 files formatted) |
 | `npm run lint` | clean | clean |
 | `npm run typecheck` | clean | clean |
-| `npm test` (Vitest) | 114 passed | 124 passed (18 files) |
+| `npm test` (Vitest) | 114 passed | 125 passed (18 files) |
 | `npm run build` | clean | clean |
-| e2e (Playwright) | 10/10 (Chromium 5, WebKit 5) | 12/12 (Chromium 6, WebKit 6), run by Task 3, not re-run for this report |
+| e2e (Playwright) | 10/10 (Chromium 5, WebKit 5) | 12/12 (Chromium 6, WebKit 6), re-run after the final fix wave |
 
 ## Measurements: real-time pacing gap
 
