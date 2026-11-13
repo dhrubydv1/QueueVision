@@ -12,6 +12,7 @@ from typing import Any
 
 from ai_engine.metrics.queue_outputs import TIMESERIES_COLUMNS
 
+BUSY_TIMEOUT_S = 30.0
 _BASE_VERSION = 1  # the schema _SCHEMA creates; MIGRATIONS take it forward from here
 
 _TS_TYPES = {
@@ -114,7 +115,7 @@ def connect(path: Path) -> sqlite3.Connection:
     """Open a connection (WAL, foreign keys on, rows as ``sqlite3.Row``), creating the parent dir."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=BUSY_TIMEOUT_S)  # waiting for another writer blocks, not fails
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -154,11 +155,14 @@ def _backup_database(conn: sqlite3.Connection, from_version: int) -> Path | None
     while target.exists():  # two starts in one second must not overwrite an earlier backup
         target = source.with_name(f"{source.name}.bak-v{from_version}-{stamp}-{counter}")
         counter += 1
-    dest = sqlite3.connect(target)
+    # A separate connection reads the committed (pre-migration) state; backing up through `conn` itself
+    # would block while it holds the write transaction the caller already opened.
+    reader, dest = sqlite3.connect(source, timeout=BUSY_TIMEOUT_S), sqlite3.connect(target)
     try:
-        conn.backup(dest)
+        reader.backup(dest)
     finally:
         dest.close()
+        reader.close()
     return target
 
 
@@ -179,20 +183,29 @@ def init_db(conn: sqlite3.Connection) -> None:
                 (str(_BASE_VERSION),),
             )
         current = _BASE_VERSION
-    pending = [(v, fn) for v, fn in MIGRATIONS if v > current]
-    if not pending:
-        return
-    if not fresh:
-        _backup_database(conn, current)
-    for version, migrate in pending:
-        conn.execute("BEGIN")
+    backed_up = fresh  # a new database has nothing worth a backup
+    for version, migrate in MIGRATIONS:
+        if version <= current:
+            continue
+        # IMMEDIATE takes the write lock up front, so a second process waits (busy timeout) here, then
+        # re-reads the version below and skips what the first one already applied.
+        conn.execute("BEGIN IMMEDIATE")
         try:
+            applied = _read_version(conn)
+            if applied is not None and applied >= version:
+                conn.rollback()
+                current = applied
+                continue
+            if not backed_up:
+                _backup_database(conn, applied)
+                backed_up = True
             migrate(conn)
             conn.execute("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'", (str(version),))
         except BaseException:
             conn.rollback()
             raise
         conn.commit()
+        current = version
 
 
 def acknowledge_alert(conn: sqlite3.Connection, video_id: int, alert_id: int) -> dict | None:

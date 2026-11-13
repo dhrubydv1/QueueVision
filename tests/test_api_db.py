@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import threading
 
 import pytest
 
@@ -294,3 +295,49 @@ def test_acknowledge_alert_is_idempotent(conn):
     assert db.acknowledge_alert(conn, vid, alert_id) == first
     assert db.acknowledge_alert(conn, vid + 1, alert_id) is None
     assert db.acknowledge_alert(conn, vid, alert_id + 99) is None
+
+
+def test_second_connection_migrating_after_stale_version_read(tmp_path, monkeypatch):
+    """A reads version 1, then B migrates fully; A must skip (no duplicate column, no second backup)."""
+    path = _v1_db(tmp_path)
+    a, b = db.connect(path), db.connect(path)
+    real, state = db._read_version, {"first": True}
+
+    def stale_read(connection):
+        version = real(connection)
+        if connection is a and state["first"]:
+            state["first"] = False
+            db.init_db(b)
+        return version
+
+    monkeypatch.setattr(db, "_read_version", stale_read)
+    db.init_db(a)
+    assert _version(a) == "2" and _columns(a).count("acknowledged_at") == 1
+    assert len(_backups(path)) == 1
+    a.close()
+    b.close()
+
+
+def test_concurrent_init_db_threads_migrate_once(tmp_path):
+    path = _v1_db(tmp_path)
+    barrier, errors = threading.Barrier(2), []
+
+    def run():
+        connection = db.connect(path)
+        try:
+            barrier.wait()
+            db.init_db(connection)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            connection.close()
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    check = db.connect(path)
+    assert _version(check) == "2" and len(_backups(path)) == 1
+    check.close()
