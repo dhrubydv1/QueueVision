@@ -341,3 +341,15 @@ def test_concurrent_init_db_threads_migrate_once(tmp_path):
     check = db.connect(path)
     assert _version(check) == "2" and len(_backups(path)) == 1
     check.close()
+
+
+def test_database_newer_than_code_is_rejected(tmp_path):
+    path = tmp_path / "future.db"
+    conn = db.connect(path)
+    db.init_db(conn)
+    newer = db.MIGRATIONS[-1][0] + 1
+    conn.execute("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'", (str(newer),))
+    conn.commit()
+    with pytest.raises(RuntimeError, match=rf"schema version {newer} is newer than this code supports"):
+        db.init_db(conn)
+    conn.close()

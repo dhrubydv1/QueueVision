@@ -183,6 +183,12 @@ def init_db(conn: sqlite3.Connection) -> None:
                 (str(_BASE_VERSION),),
             )
         current = _BASE_VERSION
+    latest = MIGRATIONS[-1][0] if MIGRATIONS else _BASE_VERSION
+    if current > latest:
+        raise RuntimeError(
+            f"database schema version {current} is newer than this code supports ({latest}); "
+            "upgrade the code or restore a backup"
+        )
     backed_up = fresh  # a new database has nothing worth a backup
     for version, migrate in MIGRATIONS:
         if version <= current:

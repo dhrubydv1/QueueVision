@@ -28,6 +28,8 @@ from api.settings import ApiSettings
 LOGGER = logging.getLogger("queuevision.api")
 
 SCHEMA_VERSION = "1.0"
+# start() must outwait a worker blocked on a SQLite write lock (busy timeout), or it would be declared failed.
+READY_TIMEOUT_S = db.BUSY_TIMEOUT_S + 15.0
 SUBSCRIBER_QUEUE_SIZE = 256  # progress backlog bound; event/status messages are never dropped
 FINAL_STATUSES = ("completed", "failed", "cancelled")
 
@@ -199,7 +201,7 @@ class JobManager:
             return
         self._thread = threading.Thread(target=self._run, name="queuevision-worker", daemon=True)
         self._thread.start()
-        if not self._ready.wait(30.0):
+        if not self._ready.wait(READY_TIMEOUT_S):
             raise RuntimeError("job worker did not start")
         if self._start_error is not None:
             self._thread = None
