@@ -171,8 +171,7 @@ file is named by content hash in `<tmp>/queuevision/trackers/`.
 `iter_frame_results(loader, tracker, queue_analyzer, frame_stride, max_frames)`
 is kept as a compatibility generator (used by tests): it skips, decodes,
 tracks, runs the analyzer and yields `FrameResult`; `process_video` does not
-use it. It does no
-drawing, writing or timing aggregation. It is built from two parts:
+use it. It does no drawing, writing or timing aggregation. It is built from two parts:
 `iter_source_frames(loader, frame_stride, max_frames)` (the file side: stride
 skipping, timestamps, `started_at`) and `track_frame(...)` (tracker plus
 analyzer, no drawing).
@@ -505,7 +504,7 @@ config  ◄── detection/types ◄── queue/*  ◄── pipeline ◄─�
 | Events only for confirmed members | Walkers through the zone must not look like queue joins |
 | Video time, never wall-clock | Results are reproducible and independent of processing speed |
 | Explicit device errors | Reports must not claim acceleration that was not used |
-| Generator instead of a monolithic loop | File output, tests and a future live API share one processing path |
+| Per-frame step (`FrameProcessor`) separate from the source and the writers | File runs and the planned live cameras share one per-frame path; only the frame source and the outputs differ |
 | Join time = first time in the zone (earliest across stitched tracks), not the confirmation time | Confirmation only happens after the dwell time; using it would shorten every wait by about the dwell time |
 | Abandon is decided after `max(exit_grace_seconds, stitching max_gap_seconds)` and only when a service point exists | A person may reappear under a new ID within the stitching gap; without a service point nobody can be served, so "abandoned" would be meaningless |
 | Service point must lie inside (or right at the edge of) the queue zone | If a member must walk outside the zone for longer than the abandon timeout to reach it, they are recorded as abandoned. Observed with stitching off, where the timeout equals `exit_grace_seconds` |
