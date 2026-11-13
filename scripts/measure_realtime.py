@@ -70,6 +70,9 @@ def install_stage_timers(timer: StageTimer) -> None:
     from ai_engine.video.video_loader import VideoLoader, VideoWriter
     from api import jobs, preview
 
+    if getattr(PersonTracker.update, "_stage_timed", False):
+        return  # already installed in this process
+
     original_update = PersonTracker.update
 
     def update(self, frame):
@@ -85,6 +88,7 @@ def install_stage_timers(timer: StageTimer) -> None:
             else:
                 timer.add("tracker_update_no_wait", took, keep=True)
 
+    update._stage_timed = True  # type: ignore[attr-defined]
     PersonTracker.update = update
     QueueAnalyzer.update = timer.wrap(QueueAnalyzer.update, "queue_analyzer_update")
     VideoLoader.read = timer.wrap(VideoLoader.read, "decode_read")
@@ -111,7 +115,6 @@ def install_stage_timers(timer: StageTimer) -> None:
     jobs.JobManager._publish = timer.wrap(jobs.JobManager._publish, "publish")
     for fname in ("add_events", "add_timeseries", "set_progress"):
         setattr(db, fname, timer.wrap(getattr(db, fname), f"db:{fname}"))
-    jobs.process_video_wrapped = True
 
 
 def percentile(values: list[float], q: float) -> float | None:

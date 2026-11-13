@@ -30,18 +30,31 @@ detector+tracker update: median 32.9 ms (p90 35.7) fast against 45.7 ms (p90 51.
 204 updates that follow a wait are the slow ones, the 3 that do not (the first frames) match the fast
 run at about 33 ms.
 
-Cause: every stage, CPU-bound OpenCV drawing as well as MPS inference, runs about 1.3 to 1.7 times
-slower once the worker sleeps about 40 ms between frames. Inference alone accounts for roughly 2.5 s
-of the 3.7 s. The preview contributes about 0.2 s: its 5-per-second limit is by wall clock, so a run
-that lasts twice as long encodes about twice as many previews (79 against 39). Check: the same
-real-time runs with the pacing wait replaced by a busy-wait (diagnostic `--spin-wait`, not product
-behaviour) give non-wait 9.599 / 9.584 / 10.172 s and a per-frame update median of 34.1 to 34.4 ms,
-essentially the fast run's 32.4 to 32.7 ms (the fast run in that batch has one slow outlier, 12.560 s).
-So the extra time comes from the machine slowing down while idle between frames (power state), not from
-a code defect, and it is not caused by the DB flush, publishing or pacing logic. It is not a bug and
-nothing was changed. Effect on users: none beyond a slightly slower inference; pacing already skips
-a wait when the run is late, and real-time wall time stays within 0.6 to 0.9 s of the 20.567 s clip
-at stride 3. Stride 1 never waits because it processes at about 23.7 fps, below the clip's 30.
+Run order reversed (real time first, then fast; stride 3, 3 repeats, same throwaway warm-up, raw data in
+`outputs/s8_pacing/stages_rtfirst.json`):
+
+| Stride 3, order real time first | Wall s (min / median / max) | Waited s | Non-wait s | Update ms median |
+|---|---|---|---|---|
+| real time | 21.361 / 21.625 / 21.731 | 7.889 / 8.808 / 8.894 | 12.468 / 12.923 / 13.737 | 44.2 to 45.6 |
+| fast | 8.968 / 9.019 / 9.169 | 0 | 8.968 / 9.019 / 9.169 | 32.5 to 33.0 |
+
+The gap holds with the order reversed (real-time non-wait about 3.9 s above the fast run), so it is not an
+artefact of the fast run going first.
+
+Cause (inferred, not measured): every stage, CPU-bound OpenCV drawing as well as MPS inference, runs
+about 1.3 to 1.7 times slower once the worker sleeps about 40 ms between frames. Inference alone accounts
+for roughly 2.5 s of the 3.7 s. The preview contributes about 0.2 s: its 5-per-second limit is by wall
+clock, so a run that lasts twice as long encodes about twice as many previews (79 against 39). The
+evidence is that a busy-wait removes the gap: the same real-time runs with the pacing wait replaced by a
+busy-wait (diagnostic `--spin-wait`, not product behaviour) give non-wait 9.599 / 9.584 / 10.172 s and a
+per-frame update median of 34.1 to 34.4 ms, essentially the fast run's 32.4 to 32.7 ms (the fast run in
+that batch has one slow outlier, 12.560 s). This is consistent with the machine slowing down while idle
+between frames (for example a CPU/GPU power state); power, frequency and thermal counters were not
+measured. The busy-wait also changes the CPU duty cycle, so it shows the slowdown depends on idling, not
+which mechanism causes it. DB flush, publishing and the pacing logic do not explain it. No code defect
+was found and nothing was changed. Effect on users: none beyond slightly slower inference; pacing
+already skips a wait when the run is late, and real-time wall time stays within about 0.6 to 1.2 s of
+the 20.567 s clip at stride 3. Stride 1 never waits because it processes at about 23.7 fps, below the clip's 30.
 
 ## Sprint 7, session 2 (2026-11-12): dashboard, preview, real-time option
 
