@@ -88,3 +88,12 @@ def test_tidy_has_no_customer_and_no_phantom(tmp_path):
     assert write_tidy(recs, out) == 1
     text = out.read_text()
     assert "customer" not in text and "3.06E+08" not in text
+
+
+def test_queued_from_exactly_midnight():
+    # q_start 0:00:00 but q_time > 0: genuinely queued (protocol v1 rule).
+    r = parse_line(row(ve="0:00:00", vx="0:00:00", vt="0", qs="0:00:00", qx="0:00:27", qt="27",
+                       ss="0:00:26", sx="0:02:00", st="94"))
+    assert r.queued and r.q_start_ts == 0 and r.q_exit_ts == 27
+    never = parse_line(row(qs="0:00:00", qx="0:00:00", qt="0"))
+    assert not never.queued

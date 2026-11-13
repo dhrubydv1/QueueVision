@@ -37,7 +37,7 @@ class CallRecord:
     date: dt.date
     type: str
     priority: int
-    queued: bool  # q_start != 0:00:00
+    queued: bool  # q_start != 0:00:00 or q_time > 0 (protocol v1 rule)
     vru_entry_ts: int
     vru_exit_ts: int
     q_start_ts: int | None
@@ -108,7 +108,9 @@ def parse_line(line: str) -> CallRecord:
         crossed = True
 
     q_raw_start, q_raw_exit = parse_hms(f[9]), parse_hms(f[10])
-    queued = q_raw_start != 0
+    # A call that queued from exactly midnight has q_start 0:00:00 but a positive q_time.
+    q_time = int(f[11])
+    queued = q_raw_start != 0 or q_time > 0
     q_start = q_exit = None
     if queued:
         q_start, c = _after(q_raw_start, vru_entry)
@@ -144,7 +146,7 @@ def parse_line(line: str) -> CallRecord:
         outcome=outcome,
         server=f[16],
         vru_time=int(f[8]),
-        q_time=int(f[11]),
+        q_time=q_time,
         ser_time=int(f[15]),
         midnight_crossed=crossed,
     )
