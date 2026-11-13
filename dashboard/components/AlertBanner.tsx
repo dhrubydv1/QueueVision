@@ -12,10 +12,11 @@ export function AlertBanner({ reasons }: Readonly<{ reasons: string[] }>) {
       <div className="flex-1">
         <p className="font-medium">Congestion alert</p>
         {reasons.length > 0 ? <ul className="mt-1 list-disc pl-5 text-sm">{reasons.map((r) => <li key={r}>{r}</li>)}</ul> : null}
+        <p id="alert-ack-note" className="mt-1 text-xs">Acknowledge hides this banner on this screen only; nothing is recorded.</p>
       </div>
       <button
         type="button"
-        title="Hides this banner on this screen only; nothing is recorded"
+        aria-describedby="alert-ack-note"
         onClick={() => setHidden(true)}
         className="h-10 rounded-control border border-warn-border bg-surface px-3 text-sm font-medium text-warn-text max-sm:h-11"
       >

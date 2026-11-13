@@ -157,3 +157,20 @@ test("phone viewport 390x844: no horizontal scroll, every control reachable", as
     await checkPhonePage(page, url);
   }
 });
+
+test("Overview hydrates without console errors and shows no build-time date or count", async ({ page, request }) => {
+  const problems: string[] = [];
+  page.on("console", (m) => {
+    if (m.type() === "error" || m.type() === "warning") problems.push(m.text());
+  });
+  page.on("pageerror", (e) => problems.push(e.message));
+
+  const html = await (await request.get(`${BASE_URL}/`)).text();
+  expect(html).not.toMatch(/runs? processing/);
+  expect(html).not.toMatch(new RegExp(String(new Date().getFullYear())));
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+  await expect(page.getByText(/\d+ runs? processing/)).toBeVisible();
+  expect(problems.filter((p) => /hydrat|did not match|server rendered/i.test(p))).toEqual([]);
+});

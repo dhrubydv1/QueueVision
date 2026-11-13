@@ -29,7 +29,7 @@ export function AppHeader() {
                   key={href}
                   href={href}
                   aria-current={active ? "page" : undefined}
-                  className={`rounded-control px-3 py-2 text-sm font-medium ${active ? "bg-primary-soft text-primary" : "text-text-2 hover:text-text"}`}
+                  className={`inline-flex min-h-11 items-center rounded-control px-3 py-2 text-sm font-medium ${active ? "bg-primary-soft text-primary" : "text-text-2 hover:text-text"}`}
                 >
                   {label}
                 </Link>
