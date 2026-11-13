@@ -84,7 +84,7 @@ Baselines from `b5bb0f9`; final run at the end of this session on this branch.
 | `.venv/bin/pytest -q` | 454 passed | 472 passed |
 | `.venv/bin/pytest -q -m "not integration"` | 443 passed, 11 deselected | 461 passed, 11 deselected |
 | `.venv/bin/ruff check .` | clean | clean |
-| `.venv/bin/ruff format --check .` | clean | clean (135 files already formatted) |
+| `.venv/bin/ruff format --check .` | clean | clean (137 files already formatted) |
 | `npm run lint` | clean | clean |
 | `npm run typecheck` | clean | clean |
 | `npm test` (Vitest) | 125 passed | 133 passed |
