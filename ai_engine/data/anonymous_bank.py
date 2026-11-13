@@ -224,7 +224,6 @@ def validate_records(per_month: dict[str, tuple[list[CallRecord], ParseStats]]) 
     types, prios = Counter(), Counter()
     hours = Counter()
     by_type_outcome: dict[str, Counter] = {}
-    ser_vs_qexit = Counter()
     ser_vs_qexit_diffs: list[int] = []
     agent_ser_vs_qexit_diffs: list[int] = []
     for month, (recs, st) in per_month.items():
