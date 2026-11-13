@@ -155,3 +155,30 @@ def test_realtime_wait_interrupted_by_cancel(settings, tmp_path) -> None:  # noq
         run = wait_status(client, video_id)
         assert run["status"] == "cancelled"
         assert time.monotonic() - started < 1.0
+
+
+def test_stop_interrupts_long_pacing_wait(settings, tmp_path) -> None:  # noqa: F811
+    import cv2
+    import numpy as np
+
+    slow_clip = tmp_path / "slow.mp4"  # 0.2 fps: each pacing wait is 5 s
+    writer = cv2.VideoWriter(str(slow_clip), cv2.VideoWriter_fourcc(*"mp4v"), 0.2, (64, 48))
+    for _ in range(6):
+        writer.write(np.full((48, 64, 3), 40, dtype=np.uint8))
+    writer.release()
+    with make_client(settings) as client:
+        video_id = upload(client, slow_clip, realtime="true").json()["video_id"]
+        deadline = time.time() + WAIT
+        while client.get(f"/api/videos/{video_id}").json()["frames_processed"] < 1:
+            assert time.time() < deadline
+            time.sleep(0.02)
+        jobs = client.app.state.jobs if hasattr(client.app.state, "jobs") else None
+        assert jobs is not None
+        started = time.monotonic()
+        jobs.stop()
+        assert time.monotonic() - started < 2.0
+        conn = db.connect(settings.db_path)
+        try:
+            assert db.get_video(conn, video_id)["status"] == "cancelled"
+        finally:
+            conn.close()

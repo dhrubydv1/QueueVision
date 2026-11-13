@@ -63,9 +63,14 @@ export interface ChangeNotAdopted {
   baseline_test_mae: number;
 }
 
-/** Contents come straight from outputs/metrics/<clip>_wait_eval.json; the exporter does not reshape them. */
+/**
+ * Contents come straight from outputs/metrics/<clip>_wait_eval.json (kind "predicted") or
+ * <clip>_observed_wait_eval.json (kind "observed"); the exporter does not reshape them.
+ * `clip` never carries the `_observed` suffix.
+ */
 export interface WaitingTimeClip {
   clip: string;
+  kind: "predicted" | "observed";
   source: string;
   metrics: Record<string, unknown>;
 }

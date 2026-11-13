@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { type KeyboardEvent, useRef, useState } from "react";
 import {
   ApiError, deleteRun, getAlerts, getEvents, getRun, getTimeseries, getWaits, reportUrl, timeseriesCsvUrl, videoUrl,
   type Alert, type Run,
@@ -66,6 +66,12 @@ function SummaryCards({ summary }: Readonly<{ summary: Run["summary"] }>) {
   );
 }
 
+function alertLabel(type: string): string {
+  if (type === "congestion_start") return "Congestion started";
+  if (type === "congestion_end") return "Congestion ended";
+  return type.replaceAll("_", " ");
+}
+
 function AlertsTable({ alerts }: Readonly<{ alerts: Alert[] }>) {
   if (alerts.length === 0) return <p className="text-sm text-text-3">No alerts</p>;
   return (
@@ -83,7 +89,7 @@ function AlertsTable({ alerts }: Readonly<{ alerts: Alert[] }>) {
           {alerts.map((a) => (
             <tr key={a.alert_id}>
               <td className="num py-2 pr-4">{formatSeconds(a.timestamp_s)}</td>
-              <td className="py-2 pr-4">{a.event_type === "congestion_end" ? "Congestion ended" : "Congestion started"}</td>
+              <td className="py-2 pr-4">{alertLabel(a.event_type)}</td>
               <td className="num py-2 pr-4">{a.queue_length}</td>
               <td className="py-2 text-text-2">{a.reasons}</td>
             </tr>
@@ -99,6 +105,7 @@ type Tab = "waits" | "events" | "alerts";
 export function RunDetail({ videoId }: Readonly<{ videoId: number }>) {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("waits");
+  const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -149,6 +156,15 @@ export function RunDetail({ videoId }: Readonly<{ videoId: number }>) {
     { id: "events", label: `Events (${eventList.length})` },
     { id: "alerts", label: `Alerts (${alertList.length})` },
   ];
+  function onTabKeyDown(e: KeyboardEvent<HTMLButtonElement>) {
+    const i = tabs.findIndex((t) => t.id === tab);
+    const next = { ArrowRight: (i + 1) % tabs.length, ArrowLeft: (i - 1 + tabs.length) % tabs.length, Home: 0, End: tabs.length - 1 }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    const id = tabs[next].id;
+    setTab(id);
+    tabRefs.current[id]?.focus();
+  }
   const link = "rounded-control border border-border-input bg-surface px-3 py-2 text-sm text-text hover:bg-chip";
   const processing = run.status === "processing" || run.status === "queued";
 
@@ -210,7 +226,8 @@ export function RunDetail({ videoId }: Readonly<{ videoId: number }>) {
               {tabs.map((t) => (
                 <button
                   key={t.id} type="button" role="tab" id={`tab-${t.id}`} aria-selected={tab === t.id} aria-controls="run-tabpanel"
-                  onClick={() => setTab(t.id)}
+                  ref={(el) => { tabRefs.current[t.id] = el; }} tabIndex={tab === t.id ? 0 : -1}
+                  onClick={() => setTab(t.id)} onKeyDown={onTabKeyDown}
                   className={`-mb-px border-b-2 px-1 py-2 text-sm font-medium ${tab === t.id ? "border-primary text-primary" : "border-transparent text-text-2 hover:text-text"}`}
                 >
                   {t.label}

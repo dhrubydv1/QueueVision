@@ -8,7 +8,8 @@ Example::
         --timeseries outputs/timeseries/clip_queue.csv
 
 People are matched one-to-one by service time (``--tolerance`` seconds).
-Writes ``outputs/metrics/<name>_wait_eval.json``.
+Writes ``outputs/metrics/<name>_wait_eval.json`` (predicted-wait evaluation) or, for the
+observed format, ``<name>_observed_wait_eval.json`` (measured and predicted waits scored separately).
 
 The ground-truth CSV may instead use the observed-wait format (header
 ``clip_id,track_id,queue_join_seconds,service_start_seconds,

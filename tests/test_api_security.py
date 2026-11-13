@@ -443,3 +443,35 @@ def test_allowed_origins_env_parsing(monkeypatch) -> None:
     monkeypatch.setenv("QUEUEVISION_ALLOWED_ORIGINS", " http://a:1/, ,http://b:2")
     allowed = ApiSettings.from_env().effective_allowed_origins()
     assert allowed == {"http://a:1", "http://b:2"}
+
+
+@pytest.mark.parametrize("origin", ["", "null", "http://localhost:30000", "http://localhost.evil:3000"])
+def test_ws_origin_edge_cases_rejected(settings, clip, origin) -> None:
+    with make_client(settings) as client:
+        video_id = _completed_run(client, clip)
+        with (
+            pytest.raises(WebSocketDisconnect) as info,
+            client.websocket_connect(f"/ws/videos/{video_id}", headers={"origin": origin}),
+        ):
+            pass
+        assert info.value.code == 1008
+
+
+def test_ws_origin_case_insensitive(settings, clip) -> None:
+    with make_client(settings) as client:
+        video_id = _completed_run(client, clip)
+        with client.websocket_connect(
+            f"/ws/videos/{video_id}", headers={"origin": "HTTP://LocalHost:3000"}
+        ) as ws:
+            assert ws.receive_json()["type"] == "snapshot"
+
+
+def test_origin_config_normalised_and_ipv6(settings, monkeypatch) -> None:
+    monkeypatch.setenv("QUEUEVISION_ALLOWED_ORIGINS", "HTTP://Example.COM:8080/")
+    assert ApiSettings.from_env().effective_allowed_origins() == {"http://example.com:8080"}
+    monkeypatch.setenv("QUEUEVISION_ALLOWED_ORIGINS", ",")
+    assert ApiSettings.from_env().effective_allowed_origins() == frozenset()  # rejects every browser origin
+    v6 = replace(settings, host="::1", port=9123).effective_allowed_origins()
+    assert "http://[::1]:9123" in v6 and "http://::1:9123" not in v6
+    assert not settings.origin_allowed("http://localhost:30000")
+    assert settings.origin_allowed("http://LOCALHOST:3000")

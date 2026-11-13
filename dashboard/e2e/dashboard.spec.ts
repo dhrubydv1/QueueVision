@@ -157,3 +157,22 @@ test("phone viewport 390x844: no horizontal scroll, every control reachable", as
     await checkPhonePage(page, url);
   }
 });
+
+test("Overview hydrates without console errors and shows no build-time date or count", async ({ page, request }) => {
+  const problems: string[] = [];
+  page.on("console", (m) => {
+    if (m.type() === "error" || m.type() === "warning") problems.push(m.text());
+  });
+  page.on("pageerror", (e) => problems.push(e.message));
+
+  const html = await (await request.get(`${BASE_URL}/`)).text();
+  expect(html).not.toMatch(/runs? processing/);
+  // The rendered date is "<weekday> <day> <month name> <year>"; RSC module ids may contain digits, so look for that shape.
+  const monthYear = new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date());
+  expect(html).not.toContain(monthYear);
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+  await expect(page.getByText(/\d+ runs? processing/)).toBeVisible();
+  expect(problems.filter((p) => /hydrat|did not match|server rendered/i.test(p))).toEqual([]);
+});

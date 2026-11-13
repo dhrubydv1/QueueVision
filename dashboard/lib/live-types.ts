@@ -73,5 +73,12 @@ export const WS_NOT_FOUND = 4404;
 
 /** Identity of an event across the socket and the history endpoint: the same event never appears twice. */
 export function eventKey(e: QueueEvent): string {
-  return `${e.event_type}|${e.timestamp_s}|${e.person_key ?? e.track_id ?? ""}`;
+  return [
+    e.event_type,
+    e.timestamp_s,
+    e.frame_index,
+    e.person_key === undefined ? "" : `p:${e.person_key}`,
+    e.track_id === undefined ? "" : `t:${e.track_id}`,
+    (e.track_ids ?? []).join(","),
+  ].join("|");
 }

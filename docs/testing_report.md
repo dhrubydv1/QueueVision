@@ -1,9 +1,100 @@
 # Testing Report
 
-Sprint 7 (session 2) results come first, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
+The Sprint 8 browser checklist (pending, for a person) and pacing investigation come first, then Sprint 7 (session 2) results, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
 kept at the end. Every number here comes from a command that was actually run
 on the machine described under Sprint 2 (same environment). Nothing was
 estimated.
+
+## Sprint 8: browser checklist for a person (PENDING, not run)
+
+Status: **pending**. No real Chrome, real Safari or real phone check has been done by Claude. The only
+browser runs so far are the automated Playwright e2e tests (Task 3, 2026-11-13: 12/12 passed, Chromium 6
+and WebKit 6; WebKit is Playwright's engine, not Safari itself). The screenshots from Sprint 7 predate the
+Sprint 7 fixes and the Sprint 8 dashboard changes, so they must be re-taken.
+
+Setup: from the repository root run `.venv/bin/python -m api` (port 8000, binds 127.0.0.1 only), build the
+dashboard (`cd dashboard && npm run build`), open `http://127.0.0.1:8000`. Use a clip with people (for example
+`cad_seq25.mp4`) so there is something to see. Save screenshots to `outputs/s8_screens/` (gitignored), named
+`<browser>_<page>.png`, for example `safari_live.png`.
+
+Phone column: by default, check the phone layout with a device emulator on the same machine (desktop Chrome
+device toolbar or Safari responsive design mode, 390 x 844, touch on). A real phone needs an explicit,
+temporary team decision, because the API has no login: anyone on the same network could upload or delete
+runs. If the team decides to do it, use a trusted network only, run
+`QUEUEVISION_ALLOWED_ORIGINS=http://<LAN-IP>:8000 .venv/bin/python -m api --host <LAN-IP>` (see
+`docs/api.md`), open `http://<LAN-IP>:8000` on the phone, and revert to the default 127.0.0.1 binding when done.
+
+Fill the Result columns with PASS, FAIL (say what you saw) or N/A. Leave blank what was not checked.
+
+| # | Page | What to look at | Chrome | Safari | Phone | Notes |
+|---|---|---|---|---|---|---|
+| 1 | Overview (`/`) | Loads without console errors. After load the line under "Overview" shows the full date (for example "Friday 13 November 2026") and "N runs processing" (or "1 run processing"); no flash, no hydration warning. The nav links are at least 44 px tall (top bar on desktop, bottom bar on phone) | | | | |
+| 2 | Overview, lists | "Latest completed runs" (up to 3) and "Recent recorded runs" (up to 10) link to the run; a processing run shows a card whose name links to the Live page, and a "Watch live" link next to it in the "Recent recorded runs" table; the accuracy summary card is present, or says the accuracy data is not generated | | | | |
+| 3 | Runs (`/runs`) | Upload form: Video file, Camera config, Every Nth frame, Blur heads, Process in real time, Start. The "All runs" table has columns Name, Camera, Status, Created, Frames processed (newest first; there is no sorting). The Created column is a clock time with the browser's zone (shows "NPT" only when the browser zone is Asia/Kathmandu, which means Nepal Time). Status chips are readable; no horizontal scroll on phone | | | | |
+| 4 | Live (`/live?id=N`), real-time run | Upload with "Process in real time" ticked: the page opens on `/live`. The preview shows video with **heads blurred**; Queue length, Predicted wait, Service rate and People in frame update; the queue chart and Events list grow; "Last update HH:MM:SS" appears. **Cancel run** stops the run and the chip changes to Cancelled; "Open the recorded run" then appears | | | | |
+| 5 | Live, congestion banner | When congestion is active a "Congestion alert" banner appears with its reasons and the chip reads "Live · congested". The note "Acknowledge hides this banner on this screen only; nothing is recorded." is visible without hovering, and the **Acknowledge** button hides the banner. (This note is on the Live page only.) | | | | |
+| 6 | Live, offline | Stop the API while the Live page is open: the chip changes to **Offline**, a message "Connection lost. Reconnecting; values below are not current." appears, and the figures are dimmed with a "Last update" line. When the API returns the chip goes back to Live and the message goes away. No blank page | | | | |
+| 7 | Recorded run (`/run?id=N`) | Pick a finished run. Header shows the status chip, "every Nth frame · heads blurred · fast or real time" and the camera; summary cards; the queue chart. The video is the browser's plain video control: press play and drag the scrubber to seek (there is no click-to-seek from the chart or lists). Heads are blurred. A run made with Blur heads off shows a note instead of the video. "Report (JSON)" and "Time series (CSV)" links work; Delete asks "Delete run N?" and Keep cancels it | | | | |
+| 8 | Recorded run, tabs | Three tabs: **Waits**, **Events**, **Alerts**. They switch by click and by Left/Right arrows, Home and End, with focus and selection moving together. Waits lists Person, Joined, Service, Wait, Abandoned; Alerts lists Time, Event, Queue length, Reasons. Congestion rows read "Congestion started" and "Congestion ended" | | | | |
+| 9 | Accuracy (`/accuracy`) | Headline cards (mean absolute error, bias, within one person) show numbers with their frame counts. A section whose source file is missing reads "Not available — <reason> (<path>)", never 0. The Waiting time card reads "Measured" with "N recorded clips", or "Not measured yet". The split buttons (All, Validation, Test) change the count-error charts; "Limits of these numbers" is listed | | | | |
+| 10 | `/legacy` | The old test page loads; `/legacy?x=1` keeps the query string; `/legacy` redirects to `/legacy/` | | | | |
+| 11 | Phone / emulator only | No horizontal scroll on any page in portrait (Overview, Runs, a run, Live, Accuracy); buttons and tabs are tappable; the Acknowledge button is easy to hit | | | | |
+| 12 | Any | Keyboard: Tab order is logical and the focus ring is visible; the Acknowledge note is read together with the button | | | | |
+
+Tester name, date, browser and OS versions, device: ______________________________
+
+Anything that fails: write what you did, what you expected and what happened, and attach the screenshot.
+
+## Sprint 8: real-time pacing gap (2026-11-13)
+
+Question: at stride 3 the Sprint 7 real-time run spent 12.6 s outside the pacing waits against 9.2 s for
+the whole fast run. Where does the extra non-wait time go? Method: `scripts/measure_realtime.py --stages`
+(timing wrappers applied from the script; no `ai_engine` or `api` code changed) on `cad_seq25.mp4`
+(617 frames, 20.567 s, MPS, yolo11n), one throwaway fast run first so the model load is in no measured
+run, then fast and real-time jobs alternating, 3 repeats per stride, one job at a time. Raw data:
+`outputs/s8_pacing/` (gitignored).
+
+| Stride, mode | Wall s (min / median / max) | Waited s | Non-wait s (min / median / max) |
+|---|---|---|---|
+| 1, fast | 25.914 / 26.062 / 26.704 | 0 | 25.914 / 26.062 / 26.704 |
+| 1, real time | 26.172 / 26.183 / 26.256 | 0 (never waited) | 26.172 / 26.183 / 26.256 |
+| 3, fast | 8.927 / 9.079 / 9.279 | 0 | 8.927 / 9.079 / 9.279 |
+| 3, real time | 21.200 / 21.381 / 21.457 | 8.459 / 8.534 / 8.690 (205 waits) | 12.691 / 12.741 / 12.923 |
+
+The gap reproduces: stride 3 real-time non-wait is about 3.7 s more than the fast run's total. Stage
+totals, stride 3, repeat 1 (fast -> real time, seconds): tracker update 6.925 -> 9.385; head blur 0.414 ->
+0.669; video write 0.591 -> 0.869; preview offer 0.131 -> 0.365 (renders 39 -> 79); metrics panel, zone,
+people and service-point drawing, decode and queue analyzer together 0.46 -> 0.79. DB writes (0.005 s),
+publish (0.000 s) and the on_frame work other than the wait and preview are negligible. Per-frame
+detector+tracker update: median 32.9 ms (p90 35.7) fast against 45.7 ms (p90 51.6) in real time; the
+204 updates that follow a wait are the slow ones, the 3 that do not (the first frames) match the fast
+run at about 33 ms.
+
+Run order reversed (real time first, then fast; stride 3, 3 repeats, same throwaway warm-up, raw data in
+`outputs/s8_pacing/stages_rtfirst.json`):
+
+| Stride 3, order real time first | Wall s (min / median / max) | Waited s | Non-wait s | Update ms median |
+|---|---|---|---|---|
+| real time | 21.361 / 21.625 / 21.731 | 7.889 / 8.808 / 8.894 | 12.468 / 12.923 / 13.737 | 44.2 to 45.6 |
+| fast | 8.968 / 9.019 / 9.169 | 0 | 8.968 / 9.019 / 9.169 | 32.5 to 33.0 |
+
+The gap holds with the order reversed (real-time non-wait about 3.9 s above the fast run), so it is not an
+artefact of the fast run going first.
+
+Cause (inferred, not measured): every stage, CPU-bound OpenCV drawing as well as MPS inference, runs
+about 1.3 to 1.7 times slower once the worker sleeps about 40 ms between frames. Inference alone accounts
+for roughly 2.5 s of the 3.7 s. The preview contributes about 0.2 s: its 5-per-second limit is by wall
+clock, so a run that lasts twice as long encodes about twice as many previews (79 against 39). The
+evidence is that a busy-wait removes the gap: the same real-time runs with the pacing wait replaced by a
+busy-wait (diagnostic `--spin-wait`, not product behaviour) give non-wait 9.584 / 9.599 / 10.172 s (min / median / max) and a
+per-frame update median of 34.1 to 34.4 ms, essentially the fast run's 32.4 to 32.7 ms (the fast run in
+that batch has one slow outlier, 12.560 s). This is consistent with the machine slowing down while idle
+between frames (for example a CPU/GPU power state); power, frequency and thermal counters were not
+measured. The busy-wait also changes the CPU duty cycle, so it shows the slowdown depends on idling, not
+which mechanism causes it. DB flush, publishing and the pacing logic do not explain it. No code defect
+was found and nothing was changed. Effect on users: none beyond slightly slower inference; pacing
+already skips a wait when the run is late, and real-time wall time stays within about 0.6 to 1.2 s of
+the 20.567 s clip at stride 3. Stride 1 never waits because it processes at about 23.7 fps, below the clip's 30.
 
 ## Sprint 7, session 2 (2026-11-12): dashboard, preview, real-time option
 

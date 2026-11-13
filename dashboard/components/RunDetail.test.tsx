@@ -88,6 +88,59 @@ describe("RunDetail", () => {
     expect(within(screen.getByRole("tabpanel")).getByText("Joined the queue")).toBeInTheDocument();
   });
 
+  it("implements roving tabindex and arrow/Home/End keys on the tabs", async () => {
+    vi.mocked(api.getRun).mockResolvedValue(run() as never);
+    view();
+    const waits = await screen.findByRole("tab", { name: "Waits (0)" });
+    const events = screen.getByRole("tab", { name: "Events (0)" });
+    const alerts = screen.getByRole("tab", { name: "Alerts (0)" });
+    expect(waits).toHaveAttribute("tabindex", "0");
+    expect(events).toHaveAttribute("tabindex", "-1");
+    expect(alerts).toHaveAttribute("tabindex", "-1");
+    for (const t of [waits, events, alerts]) {
+      expect(t).toHaveAttribute("aria-controls", "run-tabpanel");
+    }
+    expect(document.getElementById("run-tabpanel")).not.toBeNull();
+
+    waits.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(events).toHaveFocus();
+    expect(events).toHaveAttribute("aria-selected", "true");
+    expect(events).toHaveAttribute("tabindex", "0");
+    expect(waits).toHaveAttribute("tabindex", "-1");
+    await userEvent.keyboard("{ArrowRight}");
+    expect(alerts).toHaveFocus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(waits).toHaveFocus();
+    expect(waits).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(alerts).toHaveFocus();
+    expect(alerts).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("{Home}");
+    expect(waits).toHaveFocus();
+    expect(waits).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("{End}");
+    expect(alerts).toHaveFocus();
+    expect(alerts).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", "tab-alerts");
+  });
+
+  it("labels alert rows by type and never calls an unknown type started", async () => {
+    vi.mocked(api.getRun).mockResolvedValue(run() as never);
+    vi.mocked(api.getAlerts).mockResolvedValue([
+      { alert_id: 1, timestamp_s: 1, event_type: "congestion_start", queue_length: 5, reasons: "r" },
+      { alert_id: 2, timestamp_s: 2, event_type: "congestion_end", queue_length: 2, reasons: "r" },
+      { alert_id: 3, timestamp_s: 3, event_type: "queue_overflow", queue_length: 9, reasons: "r" },
+    ] as never);
+    view();
+    await userEvent.click(await screen.findByRole("tab", { name: "Alerts (3)" }));
+    const panel = screen.getByRole("tabpanel");
+    expect(within(panel).getByText("Congestion started")).toBeInTheDocument();
+    expect(within(panel).getByText("Congestion ended")).toBeInTheDocument();
+    expect(within(panel).getByText("queue overflow")).toBeInTheDocument();
+    expect(within(panel).getAllByText(/started/)).toHaveLength(1);
+  });
+
   it("deletes after an inline confirm and goes to /runs", async () => {
     vi.mocked(api.getRun).mockResolvedValue(run() as never);
     view();

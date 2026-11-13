@@ -39,6 +39,15 @@ describe("AccuracyView", () => {
     expect(screen.getByText("Not measured yet")).toBeInTheDocument();
     expect(screen.getAllByText(/321 frames/).length).toBeGreaterThanOrEqual(3);
   });
+  it("counts distinct clips for waiting time when a clip has both kinds", () => {
+    const d = { ...data, waiting_time: { source: "s", pooled: null, per_clip: [
+      { clip: "a", kind: "predicted", source: "x", metrics: {} },
+      { clip: "a", kind: "observed", source: "y", metrics: {} },
+      { clip: "b", kind: "predicted", source: "z", metrics: {} },
+    ] } } as unknown as AccuracyData;
+    render(<AccuracyView data={d} error={null} />);
+    expect(screen.getByText("2 recorded clips")).toBeInTheDocument();
+  });
   it("lists one data row per clip with its split, plus a worded legend", () => {
     render(<AccuracyView data={data} error={null} />);
     const rows = within(screen.getByTestId("clip-bars-data")).getAllByRole("row").slice(1);

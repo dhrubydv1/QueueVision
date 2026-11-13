@@ -360,3 +360,32 @@ def test_real_yolo_upload_of_cad_clip(tmp_path: Path) -> None:
         assert run["frames_processed"] >= 59
         assert len(client.get(f"/api/videos/{video_id}/timeseries").json()) >= 1
         assert client.get(f"/api/videos/{video_id}/video").status_code == 200
+
+
+def _repoint_outputs(settings, video_id: int, **outputs) -> None:
+    conn = db.connect(settings.db_path)
+    try:
+        report = db.get_video(conn, video_id)["report"]
+        report["outputs"].update(outputs)
+        db.set_report(conn, video_id, report)
+    finally:
+        conn.close()
+
+
+def test_report_paths_outside_data_dir_are_not_served(settings, clip, tmp_path, caplog) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("SECRET")
+    with make_client(settings) as client:
+        video_id = upload(client, clip).json()["video_id"]
+        assert wait_status(client, video_id)["status"] == "completed"
+        assert client.get(f"/api/videos/{video_id}/video").status_code == 200  # normal run
+        assert client.get(f"/api/videos/{video_id}/timeseries.csv").status_code == 200
+        for target in (str(outside), str(settings.outputs_dir / ".." / ".." / "outside.txt")):
+            _repoint_outputs(settings, video_id, video=target, timeseries=target)
+            with caplog.at_level("WARNING"):
+                video = client.get(f"/api/videos/{video_id}/video")
+                csv = client.get(f"/api/videos/{video_id}/timeseries.csv")
+            assert video.status_code == 404 and video.json()["detail"] == "annotated video not available"
+            assert csv.status_code == 404 and csv.json()["detail"] == "time series not available"
+            assert "SECRET" not in video.text + csv.text
+        assert "outside the data directory" in caplog.text
