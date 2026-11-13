@@ -45,6 +45,25 @@ Tester name, date, browser and OS versions, device: ____________________________
 
 Anything that fails: write what you did, what you expected and what happened, and attach the screenshot.
 
+## Fix pass, session 1 (2026-11-13): automated results
+
+Branch `fix/structure`. Baselines are `main` at `b5bb0f9`; final numbers were run at the end of the session
+(Python 3.11 `.venv`, Node 22 via nvm). The browser checklist above is still pending for a person.
+
+| Command | Baseline | Final |
+|---|---|---|
+| `.venv/bin/pytest -q` | 454 passed | 469 passed |
+| `.venv/bin/pytest -q -m "not integration"` | 443 passed, 11 deselected | 458 passed, 11 deselected |
+| `ruff check .` / `ruff format --check .` | clean | clean (135 files formatted) |
+| `npm run lint` / `typecheck` / `build` | clean | clean |
+| `npm test` (Vitest) | 125 passed | 133 passed |
+| `npm run e2e` | 12/12 | 14/14 (Chromium 7, WebKit 7), run by Task 4, not re-run for this table |
+
+New tests: the golden test of the per-frame step (`tests/test_frame_processor_golden.py`), the migration and
+concurrent-start tests (`tests/test_api_db.py`), the acknowledge route and route-order tests
+(`tests/test_api.py`), Vitest for the Acknowledge button, and one Playwright test that acknowledges a real
+alert on `cad_seq27`, reloads and finds it in the Alerts tab. Details: [fix_structure_report.md](fix_structure_report.md).
+
 ## Sprint 8: real-time pacing gap (2026-11-13)
 
 Question: at stride 3 the Sprint 7 real-time run spent 12.6 s outside the pacing waits against 9.2 s for

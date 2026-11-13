@@ -300,3 +300,15 @@ The report (`outputs/metrics/clip_queue_eval.json`) gives MAE, RMSE, bias and
 the exact-match and within-one rates. Tune the membership settings in the
 camera YAML on one clip and confirm on another so the numbers are not fitted
 to the test data.
+
+## Reserved clip-id suffix `_observed`
+
+`ai_engine/evaluate_waiting.py` writes `<name>_observed_wait_eval.json` when the
+ground truth uses the observed-wait format (person-measured
+`observed_wait_seconds`), and `scripts/export_accuracy.py` reads
+`outputs/metrics/*_wait_eval.json` for the Accuracy page. A file name ending in
+`_observed_wait_eval.json` is reported as kind **observed** for the clip whose
+id is the name with `_observed` removed; every other `*_wait_eval.json` is kind
+**predicted**. So `_observed` is a reserved suffix: never end a real clip id in
+`_observed`, or its predicted evaluation would be filed under a shortened clip
+id as observed.

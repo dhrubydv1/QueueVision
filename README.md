@@ -503,6 +503,12 @@ through. A confirmed member who disappears or steps out is kept for
 queue length is the median over `window_seconds` of the raw confirmed count.
 All times are video time (frame index ÷ FPS).
 
+**One queue zone and one service point per camera config.** A config holds
+exactly one `queue_zone` and at most one `service_line` or `service_zone`.
+The engine does not support several queues on one camera: if a place has two
+counters, write two camera configs (one per queue view) and run each one
+separately. Draw each zone with `ai_engine/tools/draw_zone.py` (below).
+
 **Draw a zone.**
 
 ```bash

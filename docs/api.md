@@ -480,7 +480,7 @@ still written to `data/outputs/<video_id>/` exactly as the CLI writes them.
 
 | Table | Content |
 |---|---|
-| `schema_meta` | `key`/`value`; holds `schema_version` (1) |
+| `schema_meta` | `key`/`value`; holds `schema_version` (2, see the migration list in [architecture.md](architecture.md)) |
 | `videos` | One row per run: `video_id`, `original_name`, `camera_id`, `status`, `error`, `options` (JSON), `fps`, `frames_total`, `frames_processed`, `created_at`, `started_at`, `finished_at`, `report` (JSON), `output_dir` |
 | `events` | `event_id`, `video_id`, `schema_version`, `event_type`, `timestamp_s`, `detected_s`, `frame_index`, `person_key`, `payload` (the full event JSON) |
 | `waits` | `video_id`, `person_key`, `track_ids`, `join_s`, `service_s`, `wait_s`, `abandoned`, `left_s` |
