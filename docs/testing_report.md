@@ -1,9 +1,41 @@
 # Testing Report
 
-The Sprint 8 pacing investigation comes first, then Sprint 7 (session 2) results, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
+The Sprint 8 browser checklist (pending, for a person) and pacing investigation come first, then Sprint 7 (session 2) results, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
 kept at the end. Every number here comes from a command that was actually run
 on the machine described under Sprint 2 (same environment). Nothing was
 estimated.
+
+## Sprint 8: browser checklist for a person (PENDING, not run)
+
+Status: **pending**. No real Chrome, real Safari or real phone check has been done by Claude. The only
+browser runs so far are the automated Playwright e2e tests (Task 3, 2026-11-13: 12/12 passed, Chromium 6
+and WebKit 6; WebKit is Playwright's engine, not Safari itself). The screenshots from Sprint 7 predate the
+Sprint 7 fixes and the Sprint 8 dashboard changes, so they must be re-taken.
+
+Setup: `scripts/run_api.sh` or `.venv/bin/uvicorn api.main:app` (default port 8000), build the dashboard
+(`cd dashboard && npm run build`), open `http://127.0.0.1:8000`. For a phone, use the machine's LAN address and
+add that origin to the API's allowed origins (see `docs/api.md`). Use a clip with people (for example
+`cad_seq25.mp4`) so there is something to see. Save screenshots to `outputs/s8_screens/` (gitignored), named
+`<browser>_<page>.png`, for example `safari_live.png`.
+
+Fill the Result column with PASS, FAIL (say what you saw) or N/A. Leave blank what was not checked.
+
+| # | Page | What to look at | Chrome | Safari | Phone | Notes |
+|---|---|---|---|---|---|---|
+| 1 | Overview (`/`) | Loads without console errors; date and "N runs processing" appear after load, no flash or hydration warning; nav links easy to click (at least 44 px tall) | | | | |
+| 2 | Live, real-time run processing | Start a real-time run from the upload form. Preview shows video with **heads blurred**; counters, wait times and alerts update; times shown are NPT (non-productive-time) values as labelled; Stop works and the page shows the run as stopped | | | | |
+| 3 | Recorded run | Pick a finished run. Overview/Alerts/Timeline tabs switch by click and by arrow keys (Left/Right, Home/End) with focus following; **video seek** by dragging the bar and clicking a timeline/alert item; heads blurred in the video; wait times (NPT) match the Runs table | | | | |
+| 4 | Recorded run, Alerts tab | Congestion events read "Congestion started" and "Congestion ended"; no unknown event type is labelled "started"; the acknowledge note ("hides this banner on this screen only") is visible without hovering | | | | |
+| 5 | Runs | List, sorting and links work; status badges readable; no horizontal scroll on phone | | | | |
+| 6 | Accuracy | Wording: a missing or unmeasured metric reads **Unknown** or **Insufficient data**, never 0 or a made-up number; predicted and observed wait evaluations are shown separately; unreadable source files are listed as missing | | | | |
+| 7 | `/legacy` | Old test page loads; `/legacy?x=1` keeps the query string; `/legacy` redirects to `/legacy/` | | | | |
+| 8 | API stopped | Stop the API while a page is open: an **Offline banner** appears, and it goes away when the API returns; no blank page | | | | |
+| 9 | Phone only | **No horizontal scroll** on any page in portrait; tabs and buttons are tappable; AlertBanner explanation reachable by touch | | | | |
+| 10 | Any | Keyboard: Tab order visible focus ring; AlertBanner explanation reachable by keyboard | | | | |
+
+Tester name, date, browser and OS versions, device: ______________________________
+
+Anything that fails: write what you did, what you expected and what happened, and attach the screenshot.
 
 ## Sprint 8: real-time pacing gap (2026-11-13)
 
