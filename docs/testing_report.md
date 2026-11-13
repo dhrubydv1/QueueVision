@@ -1,9 +1,147 @@
 # Testing Report
 
-Sprint 4 results come first, then Sprints 3 and 2; the Sprint 1 report is
+Sprint 5 results come first, then Sprints 4, 3 and 2; the Sprint 1 report is
 kept at the end. Every number here comes from a command that was actually run
 on the machine described under Sprint 2 (same environment). Nothing was
 estimated.
+
+## Sprint 5 (2026-11-08/09)
+
+Full write-up: [sprint5_implementation_report.md](sprint5_implementation_report.md);
+starting state: [sprint5_initial_audit.md](sprint5_initial_audit.md). Headline:
+**no new queue-counting option beat the Sprint 4 algorithm on held-out clips, so
+the defaults are unchanged.**
+
+### Automated tests
+
+| Run | Result |
+|---|---|
+| Start of sprint (`dd758b2`) | 203 passed |
+| End of sprint, full suite | **370 passed** |
+| Real-YOLO integration (`-m integration`) | 11 passed |
+| `ruff check .` / `ruff format --check .` | clean / 100 files formatted |
+
+### Method: replaying identical tracks
+
+YOLO11n + ByteTrack ran once per clip (`run_tracking.py --save-mot`, MPS, imgsz
+640) on the 7 CAD queueing clips and MOT17-04/09. Every queue-logic variant
+replays the same saved tracks (`ai_engine/replay_queue.py`).
+
+* Reproduction check: scoring the new run's time series gave exactly the Sprint 4
+  per-clip MAE on all 7 clips.
+* Replay gate: replaying with the shipped configs reproduces `raw_queue_count`
+  and `queue_length` row for row on all 7 clips (0 differences)
+  (`tests/test_replay.py`, skipped when the data is absent, as in CI).
+* Split fixed before measuring: val = cad_seq10, 25, 26; test (held out) =
+  cad_seq27, 39, 40, 41. No parameter was tuned; variants are one-at-a-time ablations.
+* Scoring: Sprint 4 protocol (frames from 5 s, nearest per-second sample within 0.6 s).
+
+### Queue counting (smoothed count, frames from 5 s)
+
+| Variant | All 7: MAE / RMSE / bias / ±1 | Val (122 frames): MAE | Test (285 frames): MAE / bias / ±1 |
+|---|---|---|---|
+| **legacy (Sprint 4, default)** | **1.486 / 1.911 / +0.875 / 0.595** | **1.176** | **1.619 / +0.960 / 0.537** |
+| temporal + legacy stitching | 2.212 / 2.665 / +1.173 / 0.361 | 1.525 | 2.507 / +1.549 / 0.277 |
+| temporal + guarded stitching | 2.016 / 2.583 / +1.316 / 0.460 | 1.188 | 2.370 / +1.672 / 0.379 |
+| temporal, stitching off | 1.590 / 1.990 / +0.393 / 0.518 | 1.406 | 1.668 / +0.581 / 0.498 |
+
+Raw (unsmoothed) count, test split: legacy MAE 1.751, temporal with stitching
+off 1.807. Per-clip MAE from 5 s (smoothed):
+
+| Clip | split | legacy | temporal+legacy stitch | temporal+guarded | temporal, no stitch |
+|---|---|---|---|---|---|
+| seq10 | val | 1.250 | 1.188 | 1.250 | 1.250 |
+| seq25 | val | 0.989 | 1.702 | 1.000 | 1.692 |
+| seq26 | val | 1.305 | 1.475 | 1.322 | 1.220 |
+| seq27 | test | 1.852 | 3.036 | 3.102 | 1.852 |
+| seq39 | test | 1.108 | 1.865 | 1.378 | 1.649 |
+| seq40 | test | 2.462 | 2.788 | 1.981 | 2.231 |
+| seq41 | test | 0.875 | 1.232 | 1.036 | 0.875 |
+
+Reading: identity per stitched person is only as good as the stitcher (on seq27
+the legacy stitcher made 108 links in 60 s on a ~12-person queue, linking tracks
+ByteTrack later revived). With stitching off the temporal classifier lowers the
+bias (+0.58 against +0.96 on test) but not the MAE (1.668 against 1.619). The
+one-at-a-time ablations (margin 0.25, observed fraction 0.6, mean confidence
+0.35, scale motion 1.0) all measured worse than legacy on the pooled data.
+Small sample: 7 clips from one dataset at an assumed 30 fps.
+
+### Stitching on MOT17 (`evaluate_stitching.py`, motmetrics)
+
+HOTA is **not available** (motmetrics does not implement it; TrackEval is not
+installed). Link correctness is judged against MOT17 ground-truth IDs.
+
+| Sequence | Config | IDF1 | ID switches | Frag. | Links | Correct / incorrect / unverifiable | Precision |
+|---|---|---|---|---|---|---|---|
+| MOT17-04 | no stitching | 0.412 | 47 | 140 | 0 | – | – |
+| MOT17-04 | legacy | 0.427 | 44 | 140 | 7 | 3 / 2 / 2 | 0.600 |
+| MOT17-04 | guarded | 0.418 | 50 | 140 | 4 | 3 / 1 / 0 | 0.750 |
+| MOT17-09 | no stitching | 0.508 | 68 | 78 | 0 | – | – |
+| MOT17-09 | legacy | 0.504 | 65 | 78 | 32 | 7 / 13 / 12 | 0.350 |
+| MOT17-09 | guarded | 0.521 | 76 | 78 | 16 | 6 / 5 / 5 | 0.545 |
+
+Guarded halves the links on MOT17-09 and raises link precision on both
+sequences, but counts more ID switches than no stitching, partly because a track
+carries a provisional key for the ~1 s before its link applies (scored under
+final keys: 45 on 04 and 65 on 09). The cap of 4 never triggered.
+
+CAD stitch counts, guarded against legacy (seq10, 25, 26, 27, 39, 40, 41):
+guarded 3 / 6 / 2 / 63 / 16 / 8 / 9 links, legacy 12 / 19 / 12 / 108 / 28 / 20 / 19.
+Most rejections are `distance_too_far`. Revived tracks: 0.
+
+### Lifecycle events
+
+CAD seq25 replay, default config: 11 `queue_join`, 4 `service_start`, 1
+`service_complete`, 5 `queue_abandon`, 8 `queue_exit`. Tests: 20 for
+`service_complete`; `tests/test_wait_eval_observed.py` for the waiting-time
+evaluator (synthetic data only).
+
+### Dataset validation (`scripts/validate_dataset.py`)
+
+| Item | Count |
+|---|---|
+| Clips in manifest | 27 (the 25-clip plan + 2 extra CAD clips) |
+| Acquired | 9 (CAD 7 of 5 planned; MOTChallenge 2 of 5) |
+| Planned, not acquired | 18 (MIT Traffic 10, CUHK Square 5, MOTChallenge 3) |
+| Video found / readable | 9 / 9 |
+| Annotated | 9 (CAD: queue counts only; MOT17: tracks with IDs) |
+| Licences verified this sprint | 0 |
+
+### API security tests
+
+48 tests in `tests/test_api_security.py` (content validation, `.part` handling,
+queue cap with a 429, oversized `video_id` returning 422 instead of 500, generic
+error text). Remaining risks (no authentication, no WebSocket Origin check,
+chunked uploads spooled before the size check, soft queue cap) are in
+[security_review.md](security_review.md); the API must stay on localhost.
+
+### Benchmark (`scripts/benchmark.py`)
+
+Environment: Apple M1, 8 GB, macOS 27.0.1, Python 3.11.16, torch 2.15.0,
+ultralytics 8.4.198, OpenCV 5.0.0.93, yolo11n.pt (sha256 `0ebbc80d4a76`),
+confidence 0.35, imgsz 640, ByteTrack `track_buffer` 30. Video cad_seq27
+(720×480, 30 fps). No drawing or video writing; 10 warm-up frames excluded.
+
+| Run | Frames | Decode ms | Detection ms | Tracking ms | Queue ms | Total ms (mean / p95) | FPS | CPU % | Peak RSS |
+|---|---|---|---|---|---|---|---|---|---|
+| MPS, full clip | 1794 | 0.44 | 29.00 | 4.41 | 0.76 | 34.61 / 45.83 | 28.89 | 56.4 | 468 MB |
+| CPU, first 600 | 590 | 0.51 | 56.12 | 2.07 | 0.92 | 59.61 / 94.27 | 16.78 | 234.6 | 377 MB |
+| Replay, legacy queue logic | 1794 | – | – | – | 0.52 | – | 1934 | – | 81 MB |
+| Replay, temporal + guarded | 1794 | – | – | – | 0.99 | – | 1009 | – | 81 MB |
+
+The MPS and CPU runs cover different frame counts, so they are not a like-for-like
+comparison; why tracking time is higher on MPS was not investigated.
+
+### Not tested / blocked
+
+* **Waiting-time accuracy on real video: blocked.** No footage with per-person
+  ground truth exists (CAD has no person IDs).
+* **Browser re-test of the test page:** not done this sprint (the only change is
+  the "Raw count (unsmoothed)" line).
+* **CUDA:** not tested.
+* **Licences:** none verified this sprint (MOT17 recorded as CC BY-NC-SA 3.0 in
+  Sprint 1, not re-checked; CAD, MIT Traffic and CUHK Square unknown).
+* HOTA is not available; multiple service counters are not implemented.
 
 ## Sprint 4 (2026-11-04)
 

@@ -3,12 +3,42 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
+import logging
 
-from api.settings import ApiSettings
+from api.settings import ApiSettings, SettingsError
+
+LOGGER = logging.getLogger("queuevision.api")
+
+
+def is_loopback(host: str) -> bool:
+    """True for ``localhost`` and loopback IP addresses; anything else (including 0.0.0.0) is not."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def warn_if_exposed(host: str) -> bool:
+    """Log a prominent warning when ``host`` is not loopback; True when it warned."""
+    if is_loopback(host):
+        return False
+    LOGGER.warning(
+        "SECURITY WARNING: binding to %r. The QueueVision API has NO authentication, no TLS and no "
+        "access control; anyone who can reach this address can upload, read and delete runs. "
+        "Do not expose it beyond this machine.",
+        host,
+    )
+    return True
 
 
 def main(argv: list[str] | None = None) -> None:
-    defaults = ApiSettings.from_env()
+    try:
+        defaults = ApiSettings.from_env()
+    except SettingsError as error:
+        raise SystemExit(f"error: {error}") from error
     parser = argparse.ArgumentParser(prog="python -m api", description="Run the QueueVision upload API.")
     parser.add_argument("--host", default=defaults.host, help="bind address (default: %(default)s)")
     parser.add_argument("--port", type=int, default=defaults.port, help="port (default: %(default)s)")
@@ -16,6 +46,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     import uvicorn
+
+    logging.basicConfig(level=logging.INFO)
+    warn_if_exposed(args.host)
 
     uvicorn.run("api.main:app", host=args.host, port=args.port, reload=args.reload)
 

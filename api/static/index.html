@@ -93,6 +93,7 @@
     <h2>Live numbers</h2>
     <dl id="live-numbers">
       <div><dt>Queue length</dt><dd id="n-queue">-</dd></div>
+      <div><dt>Raw count (unsmoothed)</dt><dd id="n-raw">-</dd></div>
       <div><dt>People in frame</dt><dd id="n-people">-</dd></div>
       <div><dt>Service rate</dt><dd id="n-rate">-</dd></div>
       <div><dt>Predicted wait</dt><dd id="n-wait">-</dd></div>
@@ -188,7 +189,7 @@ function resetRunView(video_id, name) {
   $("run-title").textContent = "#" + video_id + (name ? " " + name : "");
   $("events").textContent = "";
   $("run-error").textContent = "";
-  for (const id of ["n-queue", "n-people", "n-rate", "n-wait", "n-alert"]) $(id).textContent = "-";
+  for (const id of ["n-queue", "n-raw", "n-people", "n-rate", "n-wait", "n-alert"]) $(id).textContent = "-";
   show("progress", true); show("live-section", true); show("events-section", true); show("result", false);
   show("cancel", false);
   setProgress(null, "Connecting");
@@ -198,6 +199,7 @@ function resetRunView(video_id, name) {
 function applyLive(m) {
   $("n-people").textContent = m.people_in_frame ?? "-";
   $("n-queue").textContent = m.queue_length === null ? "unknown" : general(m.queue_length);
+  $("n-raw").textContent = m.raw_queue_count == null ? "unknown" : general(m.raw_queue_count);
   $("n-rate").textContent = m.service_rate_status === "ok" && m.service_rate_per_min !== null
     ? num(m.service_rate_per_min) + "/min" : "insufficient data";
   if (m.prediction_status === "ok" && m.predicted_wait_s !== null) {

@@ -6,10 +6,49 @@ Raw and processed videos and all annotation files are **not committed to Git**
 
 ```
 datasets/
-├── raw/          # original downloaded videos (MP4/AVI/MOV)
+├── raw/          # untouched originals for new acquisitions (see note below)
+├── videos/       # derived/converted MP4s for new acquisitions (not committed)
+├── frames/       # extracted frames (not committed)
 ├── processed/    # converted or trimmed copies
-└── annotations/  # ground truth: MOT17 labels, manual queue counts, annotation frames
+├── annotations/  # ground truth (not committed)
+│   ├── cvat_original/   # untouched CVAT exports
+│   ├── mot_format/      # MOT-format conversions
+│   ├── yolo_format/     # YOLO-format conversions
+│   ├── queue_events/    # queue-event and waiting-time CSVs
+│   ├── cad/  mot17/     # existing Sprint 1-4 annotations
+├── splits/       # train.txt / val.txt / test.txt (tracked)
+└── metadata/     # manifest, licence register, annotation guidelines (tracked)
 ```
+
+**Backward compatibility:** the existing MP4s in `raw/` (`cad_seq*.mp4`,
+`mot17_*.mp4`) are *derived* files (CAD clips converted from JPEG frames by
+`ai_engine/tools/prepare_cad.py`; MOT17 preview WebM re-encoded to MP4). They
+stay in `raw/` because configs, docs and tests reference them. For **new**
+acquisitions put the untouched original in `raw/` and any derived MP4 in
+`videos/`.
+
+## Manifest, licences, splits and validation (Sprint 5)
+
+- `metadata/dataset_manifest.csv`: one row per clip (acquired or planned). The
+  planned rows are an acquisition plan only; nothing in them has been downloaded.
+- `metadata/dataset_licensing_register.csv`: licence terms per dataset. Only
+  MOT17's licence (recorded in Sprint 1) is known; the rest are `unknown` and
+  must be checked before any redistribution. Nothing was re-verified this sprint.
+- `splits/*.txt`: no model is trained here; the splits separate parameter tuning
+  (`val`) from held-out reporting (`test`). Rule: CAD clips sorted by id, first
+  three to `val`, the other four to `test`; MOT17 clips to `test`; `train` is empty.
+- `metadata/annotation_guidelines.md`: how to label queue counts, events and
+  waiting times.
+
+```bash
+python scripts/validate_dataset.py --manifest datasets/metadata/dataset_manifest.csv
+```
+
+Checks files, video readability (first and near-last frame), fps, duplicate ids,
+licence registration, split consistency and missing annotations, and writes
+`outputs/metrics/dataset_validation_report.json`. Planned clips are reported as
+`planned_not_acquired`, not errors. Exit code 1 if an acquired clip has an error
+or the manifest is structurally invalid.
 
 ## Videos used in Sprint 1
 

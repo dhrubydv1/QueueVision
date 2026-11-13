@@ -117,3 +117,19 @@ def test_mark_interrupted(conn):
     assert db.get_video(conn, queued)["error"] == "interrupted by server restart"
     assert db.get_video(conn, processing)["status"] == "failed"
     assert db.get_video(conn, done)["status"] == "completed"
+
+
+def test_service_complete_and_queue_exit_are_events_only_no_wait_rows(conn):
+    from ai_engine.queue.event_schema import QueueExitEvent, ServiceCompleteEvent
+
+    vid = db.create_video(conn, "a.mp4", "cam1", {})
+    events = [
+        ServiceStartEvent("p1", (28,), 20.0, 200, 20.0, 1.0, 19.0).to_dict(),
+        ServiceCompleteEvent("p1", (28,), 30.0, 300, 31.0, 20.0, 10.0).to_dict(),
+        QueueExitEvent("p1", (28,), 32.0, 320, 34.0, "served").to_dict(),
+    ]
+    db.add_events(conn, vid, events)
+    assert db.list_events(conn, vid) == events
+    assert db.list_events(conn, vid, event_type="queue_exit") == [events[2]]
+    assert len(db.list_waits(conn, vid)) == 1  # only the service_start
+    assert _count(conn, "alerts") == 0

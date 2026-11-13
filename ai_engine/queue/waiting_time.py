@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from statistics import mean, median
 
 from ai_engine.queue.camera_config import ServiceRateSettings
-from ai_engine.queue.event_schema import QueueAbandonEvent, ServiceStartEvent
+from ai_engine.queue.event_schema import QueueAbandonEvent, ServiceCompleteEvent, ServiceStartEvent
+
+ESTIMATOR_VERSION = "queue_length_over_service_rate/v1"
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,17 @@ class AbandonedWait:
     time_in_queue_s: float
 
 
+@dataclass(frozen=True)
+class CompletedService:
+    """A service that was observed to end (person seen leaving the service zone)."""
+
+    person_key: str
+    track_ids: tuple[int, ...]
+    service_start_s: float
+    left_s: float
+    service_duration_s: float
+
+
 def percentile(values: list[float], fraction: float) -> float:
     """Linear-interpolated percentile (``fraction`` in [0, 1]) of a non-empty list."""
     ordered = sorted(values)
@@ -48,12 +61,23 @@ class WaitLog:
     def __init__(self) -> None:
         self.completed: list[CompletedWait] = []
         self.abandoned: list[AbandonedWait] = []
+        self.services: list[CompletedService] = []
 
     def add(self, event: object) -> None:
         if isinstance(event, ServiceStartEvent):
             self.completed.append(
                 CompletedWait(
                     event.person_key, event.track_ids, event.join_s, event.timestamp_s, event.wait_s
+                )
+            )
+        elif isinstance(event, ServiceCompleteEvent):
+            self.services.append(
+                CompletedService(
+                    event.person_key,
+                    event.track_ids,
+                    event.service_start_s,
+                    event.timestamp_s,
+                    event.service_duration_s,
                 )
             )
         elif isinstance(event, QueueAbandonEvent):
@@ -78,6 +102,15 @@ class WaitLog:
             "abandonment_rate": round(len(self.abandoned) / total, 3) if total else None,
         }
 
+    def service_summary(self) -> dict[str, float | int | None]:
+        """Observed service durations (only people seen leaving the service zone)."""
+        durations = [s.service_duration_s for s in self.services]
+        return {
+            "service_completed": len(self.services),
+            "mean_service_duration_s": round(mean(durations), 3) if durations else None,
+            "median_service_duration_s": round(median(durations), 3) if durations else None,
+        }
+
 
 @dataclass(frozen=True)
 class ServiceRate:
@@ -91,7 +124,11 @@ INSUFFICIENT_RATE = ServiceRate(None, "insufficient_data")
 
 
 class ServiceRateEstimator:
-    """Estimate people served per minute with a moving window or an EWMA."""
+    """Estimate people served per minute with a moving window or an EWMA.
+
+    ``add_service`` counts one event of the configured ``settings.basis`` (a service start or a
+    confirmed completion); the caller decides which events to feed in.
+    """
 
     def __init__(self, settings: ServiceRateSettings, start_s: float) -> None:
         self.settings = settings
@@ -141,6 +178,7 @@ class WaitPrediction:
     low_s: float | None
     high_s: float | None
     status: str  # "ok" | "unknown"
+    estimator: str = ESTIMATOR_VERSION
 
 
 UNKNOWN_PREDICTION = WaitPrediction(None, None, None, "unknown")

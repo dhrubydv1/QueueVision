@@ -298,10 +298,10 @@ def test_worker_survives_db_failure_while_recording_failure(settings, conn, mana
             raise RuntimeError("disk error")
         return real_progress(*args, **kwargs)
 
-    def bad_status(conn_, video_id, status, error=None):
+    def bad_status(conn_, video_id, status, error=None, **kwargs):
         if status == "failed":
             raise RuntimeError("disk error again")
-        return real_status(conn_, video_id, status, error)
+        return real_status(conn_, video_id, status, error, **kwargs)
 
     monkeypatch.setattr(db, "set_progress", bad_progress)
     monkeypatch.setattr(db, "set_status", bad_status)
@@ -332,7 +332,8 @@ def test_tracker_factory_error_fails_job(settings, conn, manager) -> None:
     jobs.submit(video_id)
     assert jobs.wait_idle(WAIT)
     record = db.get_video(conn, video_id)
-    assert record["status"] == "failed" and "no model" in record["error"]
+    # the exception text stays in the log, not in the record
+    assert record["status"] == "failed" and record["error"] == "processing failed (RuntimeError)"
 
 
 def test_restart_marks_interrupted(settings, conn, manager) -> None:

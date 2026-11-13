@@ -1,0 +1,7 @@
+# Split rule (fixed in advance; no model is trained): CAD clips sorted by id, first three -> val (parameter tuning), remaining four -> test; MOT17 clips -> test; train is empty.
+cad_seq27
+cad_seq39
+cad_seq40
+cad_seq41
+mot17_04
+mot17_09

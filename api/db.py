@@ -140,9 +140,11 @@ def create_video(conn: sqlite3.Connection, original_name: str, camera_id: str, o
     return int(cur.lastrowid)
 
 
-def set_status(conn: sqlite3.Connection, video_id: int, status: str, error: str | None = None) -> None:
+def set_status(
+    conn: sqlite3.Connection, video_id: int, status: str, error: str | None = None, commit: bool = True
+) -> None:
     """Update the status; stamps ``started_at`` on processing and ``finished_at`` on a final status."""
-    with conn:
+    with _txn(conn, commit):
         conn.execute("UPDATE videos SET status = ?, error = ? WHERE video_id = ?", (status, error, video_id))
         if status == "processing":
             conn.execute("UPDATE videos SET started_at = ? WHERE video_id = ?", (_now(), video_id))
@@ -229,8 +231,8 @@ def add_timeseries(conn: sqlite3.Connection, video_id: int, rows: list[dict], co
         )
 
 
-def set_report(conn: sqlite3.Connection, video_id: int, report: dict) -> None:
-    with conn:
+def set_report(conn: sqlite3.Connection, video_id: int, report: dict, commit: bool = True) -> None:
+    with _txn(conn, commit):
         conn.execute("UPDATE videos SET report = ? WHERE video_id = ?", (json.dumps(report), video_id))
 
 

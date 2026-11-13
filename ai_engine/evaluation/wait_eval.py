@@ -239,3 +239,285 @@ def evaluate_throughput(
         "predicted_per_min": round(pred_rate, 3),
         "abs_error_per_min": round(abs(pred_rate - gt_rate), 3),
     }
+
+
+# --- observed-wait ground truth (clip_id/track_id format) -----------------------------------------
+#
+# Ground truth in this format comes from an annotator timing each person. ``track_id`` is the
+# annotator's own number, NOT a ByteTrack id, so people are matched to the system's persons by
+# queue-join time (greedy one-to-one within a tolerance), never by id.
+
+OBSERVED_COLUMNS = (
+    "clip_id",
+    "track_id",
+    "queue_join_seconds",
+    "service_start_seconds",
+    "service_complete_seconds",
+    "observed_wait_seconds",
+    "annotation_confidence",
+)
+CONFIDENCE_LEVELS = ("low", "medium", "high")  # ascending
+OBSERVED_WAIT_TOLERANCE_S = 0.5
+JOIN_MATCH_TOLERANCE_S = 3.0
+EXCLUSION_REASONS = (
+    "unparseable_number",
+    "invalid_confidence",
+    "below_min_confidence",
+    "missing_join",
+    "not_served",
+    "service_before_join",
+    "missing_observed_wait",
+    "inconsistent_observed_wait",
+)
+
+
+@dataclass(frozen=True)
+class ObservedWait:
+    """One complete, valid ground-truth observation (join and service start both present)."""
+
+    clip_id: str
+    track_id: str
+    join_s: float
+    service_start_s: float
+    observed_wait_s: float
+    service_complete_s: float | None
+    confidence: str
+
+
+@dataclass(frozen=True)
+class ObservedGroundTruth:
+    rows_read: int
+    valid: list[ObservedWait]
+    excluded: dict[str, int]
+    inconsistent: list[dict[str, Any]]
+
+
+def is_observed_format(path: str | Path) -> bool:
+    """True when the CSV header is the observed-wait format (detected by its join column)."""
+    with Path(path).open(newline="", encoding="utf-8") as handle:
+        header = next(csv.reader(handle), [])
+    return "queue_join_seconds" in [h.strip() for h in header]
+
+
+def _optional_float(text: str) -> float | None:
+    text = text.strip()
+    return float(text) if text else None
+
+
+def read_observed_ground_truth(path: str | Path, min_confidence: str | None = None) -> ObservedGroundTruth:
+    """Read the observed-wait CSV; rows that cannot enter accuracy are counted by reason."""
+    path = Path(path)
+    if min_confidence is not None and min_confidence not in CONFIDENCE_LEVELS:
+        raise ValueError(
+            f"min_confidence must be one of {', '.join(CONFIDENCE_LEVELS)}, got {min_confidence!r}"
+        )
+    excluded = dict.fromkeys(EXCLUSION_REASONS, 0)
+    valid: list[ObservedWait] = []
+    inconsistent: list[dict[str, Any]] = []
+    rows_read = 0
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        _require_columns(reader, OBSERVED_COLUMNS, path)
+        for row_number, row in enumerate(reader, start=2):
+            if not any((value or "").strip() for value in row.values()):
+                continue
+            rows_read += 1
+            clip, track = (row["clip_id"] or "").strip(), (row["track_id"] or "").strip()
+            confidence = (row["annotation_confidence"] or "").strip().lower()
+            if confidence not in CONFIDENCE_LEVELS:
+                excluded["invalid_confidence"] += 1
+                continue
+            try:
+                join_s = _optional_float(row["queue_join_seconds"] or "")
+                start_s = _optional_float(row["service_start_seconds"] or "")
+                complete_s = _optional_float(row["service_complete_seconds"] or "")
+                observed = _optional_float(row["observed_wait_seconds"] or "")
+            except ValueError:
+                excluded["unparseable_number"] += 1
+                continue
+            if min_confidence is not None and CONFIDENCE_LEVELS.index(confidence) < CONFIDENCE_LEVELS.index(
+                min_confidence
+            ):
+                excluded["below_min_confidence"] += 1
+                continue
+            if join_s is None:
+                excluded["missing_join"] += 1
+            elif start_s is None:
+                excluded["not_served"] += 1
+            elif start_s < join_s:
+                excluded["service_before_join"] += 1
+            elif observed is None:
+                excluded["missing_observed_wait"] += 1
+            elif abs(observed - (start_s - join_s)) > OBSERVED_WAIT_TOLERANCE_S:
+                excluded["inconsistent_observed_wait"] += 1
+                inconsistent.append(
+                    {
+                        "row": row_number,
+                        "clip_id": clip,
+                        "track_id": track,
+                        "observed_wait_seconds": observed,
+                        "service_start_minus_join": round(start_s - join_s, 3),
+                    }
+                )
+            else:
+                valid.append(ObservedWait(clip, track, join_s, start_s, observed, complete_s, confidence))
+    return ObservedGroundTruth(rows_read, valid, excluded, inconsistent)
+
+
+def match_by_join_time(
+    observations: list[ObservedWait], predicted: list[WaitRecord], tolerance_s: float = JOIN_MATCH_TOLERANCE_S
+) -> tuple[list[tuple[ObservedWait, WaitRecord]], list[ObservedWait], list[WaitRecord]]:
+    """One-to-one greedy matching by ascending |join-time difference| within the tolerance.
+
+    Returns ``(matches, unmatched_observations, extra_predictions)``.
+    """
+    candidates = sorted(
+        (abs(o.join_s - p.join_s), oi, pi)
+        for oi, o in enumerate(observations)
+        for pi, p in enumerate(predicted)
+        if abs(o.join_s - p.join_s) <= tolerance_s
+    )
+    used_o: set[int] = set()
+    used_p: set[int] = set()
+    matches = []
+    for _, oi, pi in candidates:
+        if oi in used_o or pi in used_p:
+            continue
+        used_o.add(oi)
+        used_p.add(pi)
+        matches.append((observations[oi], predicted[pi]))
+    matches.sort(key=lambda pair: pair[0].join_s)
+    return (
+        matches,
+        [o for i, o in enumerate(observations) if i not in used_o],
+        [p for i, p in enumerate(predicted) if i not in used_p],
+    )
+
+
+def error_statistics(errors: list[float]) -> dict[str, Any]:
+    """Count, MAE, RMSE, median absolute error and mean bias of signed errors (predicted - observed)."""
+    stats: dict[str, Any] = {
+        "samples": len(errors),
+        "mae_s": None,
+        "rmse_s": None,
+        "median_abs_error_s": None,
+        "bias_s": None,
+    }
+    if errors:
+        stats["mae_s"] = round(sum(abs(e) for e in errors) / len(errors), 3)
+        stats["rmse_s"] = round((sum(e * e for e in errors) / len(errors)) ** 0.5, 3)
+        stats["median_abs_error_s"] = round(_median([abs(e) for e in errors]), 3)
+        stats["bias_s"] = round(sum(errors) / len(errors), 3)
+    return stats
+
+
+@dataclass(frozen=True)
+class ClipPredictions:
+    """The system's outputs for one clip: its waits and, optionally, the predicted-wait time series."""
+
+    waits: list[WaitRecord]
+    timeseries: list[TimeseriesPrediction] | None = None
+
+
+def _lookup_prediction(timeseries: list[TimeseriesPrediction], time_s: float) -> TimeseriesPrediction | None:
+    times = [r.time_s for r in timeseries]
+    index = bisect_left(times, time_s)
+    near = [i for i in (index - 1, index) if 0 <= i < len(times)]
+    if not near:
+        return None
+    best = min(near, key=lambda i: abs(times[i] - time_s))
+    return timeseries[best] if abs(times[best] - time_s) <= PREDICTION_LOOKUP_TOLERANCE_S else None
+
+
+def evaluate_observed_waits(
+    truth: ObservedGroundTruth,
+    predictions: dict[str, ClipPredictions],
+    join_tolerance_s: float = JOIN_MATCH_TOLERANCE_S,
+    estimator: str | None = None,
+) -> dict[str, Any]:
+    """Score the system against observed waits, measured and predicted waits kept apart.
+
+    * ``measured``: the wait the system measured for the matched person (service start minus
+      join) versus the observed wait; error = system - observed.
+    * ``predicted``: the time-series ``predicted_wait_s`` at the observed join time versus the
+      observed wait; each record keeps the predicted value, prediction timestamp, horizon
+      (observed service start minus prediction time), status and estimator version.
+
+    Clips without predictions are listed in ``clips_without_predictions`` and their valid
+    observations count as unmatched, never as zero error.
+    """
+    by_clip: dict[str, list[ObservedWait]] = {}
+    for observation in truth.valid:
+        by_clip.setdefault(observation.clip_id, []).append(observation)
+
+    measured_errors: list[float] = []
+    predicted_errors: list[float] = []
+    per_clip: dict[str, dict[str, Any]] = {}
+    records: list[dict[str, Any]] = []
+    unmatched = extra = unknown_predictions = 0
+    for clip_id in sorted(by_clip):
+        observations = by_clip[clip_id]
+        clip = predictions.get(clip_id)
+        if clip is None:
+            unmatched += len(observations)
+            per_clip[clip_id] = {
+                "valid_observations": len(observations),
+                "matched": 0,
+                "measured": error_statistics([]),
+                "predicted": error_statistics([]),
+            }
+            continue
+        matches, missed, extra_predictions = match_by_join_time(observations, clip.waits, join_tolerance_s)
+        unmatched += len(missed)
+        extra += len(extra_predictions)
+        clip_measured = [p.wait_s - o.observed_wait_s for o, p in matches if p.wait_s is not None]
+        clip_predicted: list[float] = []
+        if clip.timeseries is not None:
+            for observation in observations:
+                row = _lookup_prediction(clip.timeseries, observation.join_s)
+                usable = row is not None and row.status == "ok" and row.predicted_wait_s is not None
+                record: dict[str, Any] = {
+                    "clip_id": clip_id,
+                    "track_id": observation.track_id,
+                    "join_s": observation.join_s,
+                    "observed_wait_s": observation.observed_wait_s,
+                    "predicted_wait_s": row.predicted_wait_s if row is not None and usable else None,
+                    "prediction_time_s": row.time_s if row is not None else None,
+                    "horizon_s": round(observation.service_start_s - row.time_s, 3) if row else None,
+                    "status": row.status if row is not None else "no_prediction_row",
+                    "estimator": estimator,
+                }
+                records.append(record)
+                if usable and row is not None and row.predicted_wait_s is not None:
+                    clip_predicted.append(row.predicted_wait_s - observation.observed_wait_s)
+                else:
+                    unknown_predictions += 1
+        measured_errors += clip_measured
+        predicted_errors += clip_predicted
+        per_clip[clip_id] = {
+            "valid_observations": len(observations),
+            "matched": len(matches),
+            "measured": error_statistics(clip_measured),
+            "predicted": error_statistics(clip_predicted),
+        }
+    return {
+        "ground_truth_rows": truth.rows_read,
+        "valid_observations": len(truth.valid),
+        "excluded_rows": dict(truth.excluded),
+        "inconsistent_rows": truth.inconsistent,
+        "matching": {
+            "rule": "greedy one-to-one by queue-join time",
+            "tolerance_s": join_tolerance_s,
+            "unmatched_observations": unmatched,
+            "extra_predicted_persons": extra,
+        },
+        "clips_without_predictions": sorted(set(by_clip) - set(predictions)),
+        "measured": error_statistics(measured_errors),
+        "predicted": {
+            **error_statistics(predicted_errors),
+            "unknown_or_missing": unknown_predictions,
+            "estimator": estimator,
+            "records": records,
+        },
+        "per_clip": per_clip,
+    }

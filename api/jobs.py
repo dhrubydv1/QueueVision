@@ -298,7 +298,9 @@ class JobManager:
                 except Exception as error:
                     LOGGER.exception("Job %s failed", video_id)
                     try:
-                        self._finish(conn, video_id, "failed", str(error) or type(error).__name__)
+                        self._finish(
+                            conn, video_id, "failed", f"processing failed ({type(error).__name__})"
+                        )  # details stay in the log
                     except Exception:
                         LOGGER.exception("Could not record failure of job %s", video_id)
                 finally:
@@ -315,8 +317,13 @@ class JobManager:
             if conn is not None:
                 conn.close()
 
-    def _finish(self, conn, video_id: int, status: str, error: str | None = None) -> None:
-        db.set_status(conn, video_id, status, error)
+    def _finish(
+        self, conn, video_id: int, status: str, error: str | None = None, report: dict | None = None
+    ) -> None:
+        with conn:  # the report and the final status are stored together or not at all
+            if report is not None:
+                db.set_report(conn, video_id, report, commit=False)
+            db.set_status(conn, video_id, status, error, commit=False)
         record = db.get_video(conn, video_id)
         if record:
             self._publish(video_id, status_message(video_id, record))
@@ -392,6 +399,5 @@ class JobManager:
             should_stop=self._should_stop,
         )
         flush()
-        db.set_report(conn, video_id, report)
         stopped = bool(report.get("stopped_early"))  # a cancel after the last frame leaves the run completed
-        self._finish(conn, video_id, "cancelled" if stopped else "completed")
+        self._finish(conn, video_id, "cancelled" if stopped else "completed", report=report)

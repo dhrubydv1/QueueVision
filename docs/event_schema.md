@@ -9,7 +9,7 @@ that returns a JSON-safe dict (tuples become lists).
 A run with `--camera-config` writes every event, in the order it was
 produced, to `outputs/events/<name>_events.jsonl`: one JSON object per line.
 The same events also feed `<name>_zone_events.csv` (zone events only),
-`<name>_waits.csv` (service and abandon events) and `<name>_alerts.csv`
+`<name>_waits.csv` (service-start and abandon events only; `service_complete` and `queue_exit` do not create wait rows) and `<name>_alerts.csv`
 (congestion events).
 
 The JSON examples below are real lines copied from the MOT17 smoke runs
@@ -21,8 +21,8 @@ about accuracy on real queues.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `schema_version` | string | `"1.0"`. Increase it when a field is removed or changes meaning |
-| `event_type` | string | One of `zone_enter`, `zone_exit`, `queue_join`, `service_start`, `queue_abandon`, `congestion_start`, `congestion_end` |
+| `schema_version` | string | `"1.0"`. Increase it when a field is removed or changes meaning. Adding an event type or a field is additive and keeps `"1.0"` (the Sprint 5 events `service_complete` and `queue_exit` did so) |
+| `event_type` | string | One of `zone_enter`, `zone_exit`, `queue_join`, `service_start`, `queue_abandon`, `congestion_start`, `congestion_end`, `service_complete`, `queue_exit` (the last two were added after the first release; consumers must ignore event types they do not know) |
 | `timestamp_s` | number | Video time (seconds, `frame_index / FPS`) at which the thing happened. Never wall-clock |
 | `frame_index` | integer | Source frame index of `timestamp_s` (0-based, counts frames skipped by `--frame-stride`) |
 | `detected_s` | number | Video time at which the system emitted the event. It is greater than or equal to `timestamp_s` |
@@ -137,6 +137,54 @@ service point is configured, because without one nobody can be served.
 An abandonment can be wrong if the service point lies outside the queue zone
 and people legitimately walk out of the zone to reach it (see
 [architecture.md](architecture.md), service point placement).
+
+### `service_complete`
+
+A person who had a `service_start` was **observed leaving the service zone**: their foot
+point was visible and outside the zone, after at least `service.min_service_seconds`
+(default 2.0) inside, and stayed outside for `service.exit_confirm_seconds` (default 1.0)
+while visible. It is never inferred from disappearance: a person who vanishes (or
+reappears outside after an unobserved gap longer than `exit_confirm_seconds`) while in
+service produces no `service_complete`. Only emitted with a `service_zone`. With a
+`service_line` it is never emitted, because a line gives no dwell area in which to
+observe someone leaving.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `person_key` | string | Anonymous per-video key |
+| `track_ids` | array of integers | All tracks of this person so far |
+| `timestamp_s`, `frame_index` | number, integer | First time the person was seen outside the service zone (when they left) |
+| `detected_s` | number | When the exit was confirmed (`timestamp_s` + at least `exit_confirm_seconds`) |
+| `service_start_s` | number | The `timestamp_s` of the matching `service_start` |
+| `service_duration_s` | number | `timestamp_s - service_start_s` |
+
+```json
+{"schema_version": "1.0", "event_type": "service_complete", "person_key": "p0031", "track_ids": [38, 57], "timestamp_s": 21.4, "frame_index": 642, "detected_s": 22.4, "service_start_s": 15.766666666666667, "service_duration_s": 5.633333333333333}
+```
+
+(The line above illustrates the field layout only; it is not taken from a run.)
+
+### `queue_exit`
+
+A person who joined the queue (served or not) has not been seen anywhere for the same
+forget period the lifecycle uses for abandonment, `max(exit_grace_seconds, stitching
+max_gap_seconds)` (the gap only with stitching on). It is emitted once per person and
+does not change `queue_abandon`, which keeps its meaning (left the queue zone without
+being served).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `person_key` | string | Anonymous per-video key |
+| `track_ids` | array of integers | All tracks of this person |
+| `timestamp_s`, `frame_index` | number, integer | Last time the person was seen anywhere |
+| `detected_s` | number | When the exit became known (forget period after `timestamp_s`) |
+| `outcome` | string | `served` (had a `service_start`), `abandoned` (had a `queue_abandon`) or `unknown` (neither: for example no service point is configured, or the person was lost while still counted as waiting) |
+
+```json
+{"schema_version": "1.0", "event_type": "queue_exit", "person_key": "p0031", "track_ids": [38, 57], "timestamp_s": 24.0, "frame_index": 720, "detected_s": 25.5, "outcome": "served"}
+```
+
+(Field layout illustration, not taken from a run.)
 
 ### `congestion_start`
 

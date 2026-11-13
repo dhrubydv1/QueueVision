@@ -39,13 +39,22 @@ is not auto-loaded):
 | `QUEUEVISION_PORT` | `8000` | Default for `--port` |
 | `QUEUEVISION_MODEL` | `ai_engine/models/yolo11n.pt` | Detector weights |
 | `QUEUEVISION_DEVICE` | the engine default (`auto`) | `auto`, `cpu`, `mps`, `cuda` |
+| `QUEUEVISION_MAX_QUEUED_JOBS` | `5` | Runs allowed to *wait* in the queue (the running one is not counted); further uploads get `429` |
+| `QUEUEVISION_MAX_VIDEO_SECONDS` | `1800` | Longest accepted video (frame count / fps); longer uploads get `400` |
+| `QUEUEVISION_MAX_FRAME_PIXELS` | `8294400` (3840x2160) | Largest accepted frame (width x height); larger uploads get `400` |
+
+The three limits above must be positive numbers (`QUEUEVISION_MAX_QUEUED_JOBS`
+an integer). A bad value stops the server at start-up with an error naming the
+variable. `python -m api` logs a prominent warning when `--host` is not a
+loopback address: the API has no authentication and must not be exposed. See
+[security_review.md](security_review.md).
 
 Runtime data lives under the data directory and is git-ignored:
 
 ```
 data/
 ├── queuevision.db                       # SQLite
-├── uploads/<video_id>/video<id>.<ext>   # the uploaded file (the original name is only stored in the DB)
+├── uploads/<video_id>/video<id>.<ext>   # the uploaded file; the name is generated from the id, the client's name is only stored (sanitized) in the DB
 └── outputs/<video_id>/                  # annotated video, metrics, events, timeseries (as the CLI writes them)
 ```
 
@@ -75,7 +84,13 @@ queued -> processing -> completed | failed | cancelled
 
 ## REST endpoints
 
-Errors use FastAPI's `{"detail": ...}` body with status 400, 404, 409, 413 or 422.
+Errors use FastAPI's `{"detail": ...}` body with status 400, 404, 409, 413, 422,
+429 or 500. Error messages are deliberately generic (no file paths or internals;
+details go to the server log): an unexpected server error is
+`{"detail": "internal server error"}`, a failed run's `error` is
+`processing failed (<ExceptionClass>)`, and a broken camera file is reported as
+`invalid camera config`. A `video_id` outside `1` to `2**63-1` gives `422` on
+every route (the WebSocket is closed with code 1008 before it is accepted).
 
 | Method and path | Returns |
 |---|---|
@@ -85,6 +100,18 @@ Errors use FastAPI's `{"detail": ...}` body with status 400, 404, 409, 413 or 42
 | `GET /api/videos` | All runs, newest first |
 | `GET /api/videos/{id}` | Run record: status, progress, options, timings, error, `summary` |
 | `GET /api/videos/{id}/events?type=&limit=&offset=` | Event payloads in time order; `type` filters by `event_type`, `limit` 1 to 10000 (default 1000), `offset` >= 0 |
+
+Event types: besides the original types, `service_complete` and `queue_exit` are new
+(additive, schema version still `"1.0"`; see [event_schema.md](event_schema.md)). They are
+stored in `events` like any other event, appear in `event_counts` and in the WebSocket
+`event` messages (the unchanged `to_dict()` payload), but create **no** `waits` row: `waits`
+keeps meaning `service_start` / `queue_abandon`. Clients must ignore event types they do not
+know. `service_complete` only occurs for cameras with a `service_zone`.
+
+The report's `queue.service_rate` section gains `estimator` (`"queue_length_over_service_rate/v1"`),
+`basis` and `rate_basis` (both the configured `service_rate.basis`, `"service_start"` or
+`"service_complete"`), and `queue.service_completions` (observed service durations, or a
+`note` without a service zone). Existing fields are unchanged.
 | `GET /api/videos/{id}/waits` | Wait rows |
 | `GET /api/videos/{id}/alerts` | Alert rows |
 | `GET /api/videos/{id}/timeseries` | Per-second rows (same columns as the CLI's `<name>_queue.csv`) |
@@ -101,15 +128,34 @@ Multipart form fields:
 
 | Field | Required | Rules |
 |---|---|---|
-| `file` | yes | Extension `.mp4`, `.avi`, `.mov`, `.mkv` or `.m4v`; non-empty; at most the upload limit (default 500 MB) |
+| `file` | yes | Extension `.mp4`, `.avi`, `.mov`, `.mkv` or `.m4v`; non-empty; at most the upload limit (default 500 MB); the content must match the extension and be a readable video (see below) |
 | `camera_id` | yes | Letters, digits, `_` and `-`; must match a valid file `<camera_id>.yaml` in the camera directory. A camera config is required |
 | `frame_stride` | no | Integer 1 to 10, default 1 |
 | `blur_heads` | no | Boolean, default `true` (see [privacy.md](privacy.md)) |
 | `max_frames` | no | Integer >= 1; stops after that many processed frames |
 
-A wrong extension, an empty file or a bad or unknown camera gives `400`, a
-file over the limit gives `413`, and an out-of-range option gives `422`. A
-rejected upload leaves no database row or files behind.
+A wrong extension, an empty file, a file that is not a readable video, a video
+over the duration or frame-size limit, or a bad or unknown camera gives `400`;
+a file over the byte limit gives `413`; an out-of-range option gives `422`; and
+a full queue gives `429` (`too many queued runs; try again later`). A rejected
+upload leaves no database row or files behind.
+
+Content validation: the first bytes must match the extension (MP4/MOV/M4V:
+`ftyp`; AVI: `RIFF`...`AVI `; MKV: EBML header), and OpenCV must open the file,
+decode the first frame and report a positive width and height. Messages are
+`file is not a readable video`, `video too long: limit N s` and
+`video frame too large: limit N pixels`. The upload is first written as
+`video<id><ext>.part` and renamed only after validation, so an interrupted upload
+never looks complete; leftover `.part` files are deleted at server start-up. The
+queue-full (`429`) and declared-size (`413`) checks run before the request body
+is parsed. The stored original name is the basename only, without control
+characters, NFC-normalized and at most 255 characters (`upload` if nothing is
+left).
+
+Behaviour changes in Sprint 5: `POST /api/videos` can now return `429`; videos
+that are mislabelled or undecodable are rejected at upload instead of failing
+later as a run; a run's `error` text and the `400` camera message no longer
+include the underlying exception text.
 
 ```bash
 curl -F file=@datasets/raw/cad_seq25.mp4 -F camera_id=cad_seq25 \

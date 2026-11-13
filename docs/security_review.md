@@ -1,0 +1,49 @@
+# Security review (Sprint 5)
+
+## Scope
+
+QueueVision's API and test page are a **local proof of concept**. The server
+binds to `127.0.0.1` by default and is meant to be used by one person on one
+machine with recorded clips. It is **not** hardened for exposure to a network or
+the internet, and it deliberately has **no authentication**: a half-built login
+would only give false assurance. This review lists what was checked, what was
+fixed in Sprint 5 and what risk remains. Files referenced are under `api/` and
+`tests/`; line numbers are as of the end of Sprint 5.
+
+## Areas investigated
+
+| Area | Finding | Status | Evidence |
+|---|---|---|---|
+| Authentication | None. Every endpoint, the static page and the WebSocket are open to anyone who can reach the port. | Acceptable for local PoC; remaining risk if exposed | `api/main.py` (no auth dependency); `python -m api` now warns on a non-loopback host (`api/__main__.py:24`, `test_loopback_detection_and_warning`) |
+| Authorization | No users, so no per-user ownership: any client can read, cancel or delete any run. | Acceptable for local PoC; remaining risk if exposed | `api/main.py` routes `/api/videos/{id}*` |
+| Upload validation | Previously only the file extension was checked. Now: container magic bytes must match the extension (MP4/MOV/M4V `ftyp`, AVI `RIFF....AVI `, MKV EBML; unknown family rejected), then OpenCV must open the file, decode the first frame and report positive size. Rejection is a generic `400`; the DB row and folder are removed. | Fixed this sprint | `api/upload_validation.py` (`check_magic`, `probe_video`); `api/main.py:214`; `test_non_video_bytes_rejected_and_cleaned_up`, `test_wrong_magic_for_extension_rejected`, `test_right_magic_but_undecodable_rejected`, `test_check_magic_families` |
+| Size limits | Byte limit (`QUEUEVISION_MAX_UPLOAD_MB`, 500) was already enforced while streaming. Added duration limit (default 1800 s) and frame size limit (default 3840x2160 px), checked from the probe. `Content-Length` over the limit is refused before the body is parsed. Duration is only known when the container reports fps and frame count. | Fixed this sprint (see remaining risk for chunked bodies) | `api/upload_validation.py` (`probe_video`); `api/main.py` `UploadGuardRoute`; `test_too_long_video_rejected`, `test_oversized_frame_rejected`, `test_oversize_content_length_rejected_early` |
+| Resource exhaustion | Unlimited queued uploads could fill the disk. Now at most `QUEUEVISION_MAX_QUEUED_JOBS` (default 5) runs may *wait*; the upload is refused with `429` before the body is parsed. The depth counts waiting runs only, not the one running, so up to N+1 runs are active. The check is not atomic with `submit`, so two simultaneous uploads can overshoot by one. | Fixed this sprint (soft limit) | `api/main.py` `UploadGuardRoute`; `api/jobs.py` `queue_depth`; `test_queue_limit_returns_429_before_reading_body`, `test_queue_limit_checked_before_body_is_parsed` |
+| Background task lifecycle | One worker thread; shutdown asks it to stop and cancels the current job; runs left `queued`/`processing` by a crash are marked `failed` at start-up. Worker failures are caught per job and the worker keeps going. | Acceptable (already covered in Sprint 4) | `api/jobs.py` `_run`, `stop`; `tests/test_api_jobs.py::test_restart_marks_interrupted`, `test_worker_survives_db_failure_while_recording_failure` |
+| WebSocket access control | `/ws/videos/{id}` has no authentication and no Origin check; anyone who can connect can watch any run's live numbers. Out-of-range ids are refused before `accept` (close code 1008); unknown ids close with 4404. | Acceptable for local PoC; remaining risk if exposed | `api/main.py` `live`; `test_websocket_out_of_range_id_closes_cleanly` |
+| CORS | No CORS middleware is installed, so browsers keep the same-origin policy: other sites cannot read API responses. (Cross-site *requests* can still be sent, e.g. a form POST, and there is no CSRF token; see remaining risks.) | Acceptable for local PoC | `grep -rn CORS api` finds nothing; `test_no_cors_headers` |
+| ID handling | Any integer was accepted as `video_id`; a value above 2**63-1 raised `OverflowError` inside SQLite and returned `500` (reproduced before the fix on all HTTP routes and the WebSocket). | Fixed this sprint | `api/main.py:41` (`VideoId`, `1 <= id <= 2**63-1`); `test_out_of_range_video_id_is_422_on_every_route`, `test_max_video_id_is_a_clean_404` |
+| File storage | Stored name is generated from the DB id (`uploads/<id>/video<id><ext>`); the client's filename is never used as a path. Extension comes from a fixed allow-list. Original name is sanitized (basename, no control/format characters, NFC, 255 chars, fallback `upload`) before it is stored and shown. The page writes names with `textContent` (no `innerHTML` in `index.html`). | Fixed this sprint | `api/upload_validation.py` (`sanitize_filename`); `api/main.py:182`; `test_filename_sanitized_and_storage_name_generated`, `test_sanitize_filename_cases` |
+| Temp file cleanup | Uploads are written to `video<id><ext>.part`, validated, then `os.replace`d, so an interrupted upload never looks complete. Any failure removes the row and the folder. At start-up, stale `*.part` files under the uploads directory are deleted (only those) and the count is logged. | Fixed this sprint | `api/main.py:214-222`, `remove_partial_uploads`; `test_no_part_file_after_interrupted_write`, `test_startup_removes_only_stale_part_files`, `test_startup_logs_removed_count` |
+| SQLite transactions | Each request opens its own connection (`_open`); the worker owns one connection; `cancel` opens a short one. No connection is shared across threads. Event/time-series/progress batches were already one transaction. Finishing a job stored the report and the status in two commits; they are now one transaction (a crash between them could have left a report on a run that still said `processing`). | Fixed this sprint | `api/main.py` `_open`; `api/jobs.py` `flush`, `_finish`; `api/db.py` `_txn`; `test_report_and_final_status_are_stored_atomically` |
+| Error disclosure | Job failures stored `str(error)`, which was returned by `GET /api/videos/{id}` and the WebSocket and could contain file paths. Camera errors in `POST /api/videos` and `GET /api/cameras` also carried raw config errors. Now: failures store `processing failed (<ExceptionClass>)`; camera errors are `unknown or invalid camera '<id>'` / `invalid camera config`; unexpected exceptions return `{"detail": "internal server error"}` (500). Details go to the server log. | Fixed this sprint | `api/jobs.py:299-303`; `api/main.py:101` (handler), `:160`, `:194`; `test_job_failure_message_is_generic`, `test_unknown_and_broken_camera_messages_have_no_details`, `test_unexpected_exception_returns_generic_500` |
+| Logging of sensitive info | Logs contain exception text and tracebacks, which may include local paths, plus camera ids. They contain no video content. Uploaded file names are not logged. Logs are local to the machine. | Acceptable for local PoC | `api/main.py` `LOGGER` calls; `api/jobs.py:299` |
+| Privacy of video data | Uploaded videos of people are stored unencrypted and unblurred under `data/uploads/`; annotated outputs are blurred only when `blur_heads` is on (default). Deleting a run removes its upload and outputs. See [privacy.md](privacy.md). | Remaining risk | `docs/privacy.md`; `api/main.py` `delete` |
+| Host binding | Default `127.0.0.1` is unchanged. A non-loopback `--host` (including `0.0.0.0`) logs a prominent warning at start-up. | Fixed this sprint (warning only) | `api/__main__.py:24`; `test_loopback_detection_and_warning` |
+| Settings validation | The new limits must be positive finite numbers; a bad value stops start-up with a clear message naming the variable. | Fixed this sprint | `api/settings.py:18`; `test_bad_new_settings_rejected` |
+
+## Remaining deployment risks / restrictions
+
+Do not deploy this API on a shared machine or network as it is. In particular:
+
+* **No authentication or authorization, no TLS.** Anyone who can reach the port can upload, read, cancel and delete everything. Traffic is plain HTTP/WS.
+* **No CSRF protection and no Origin check on the WebSocket.** A web page open in the same browser can make requests to `127.0.0.1:8000`; with no CORS it cannot read the answers, but state-changing requests (upload, cancel, delete) can still be sent.
+* **No rate limiting** beyond the waiting-queue cap. One client can still keep the worker busy and the queue full.
+* **The queue cap is a soft limit** (checked, not locked, against `submit`).
+* **Request bodies are parsed before the handler runs.** Starlette spools the multipart body to a temp file before the byte limit in the handler applies. Only a declared `Content-Length` over the limit is refused early; a chunked upload without `Content-Length` is spooled in full first. Run behind a reverse proxy with a body limit if ever exposed.
+* **Decoding untrusted files is an attack surface.** OpenCV/FFmpeg parse every upload (probe and processing); a malicious file could exploit a decoder bug. Content checks reduce accidents, not a determined attacker. Keep OpenCV updated, and run the worker unprivileged or sandboxed if exposed.
+* **Duration check depends on the container.** A file that lies about, or omits, fps/frame count is not duration-limited by the probe (the byte limit still applies).
+* **Videos of people are stored unencrypted** on disk (uploads unblurred), with default file permissions, until deleted. Disk encryption and retention are the operator's job.
+* **Single worker, single process, SQLite.** No horizontal scaling; the in-memory queue is lost on restart (runs are marked `failed`).
+* **Logs may include local paths** from exception messages.
+* **Pre-existing, not changed:** `QUEUEVISION_MAX_UPLOAD_MB`/`QUEUEVISION_PORT` parse errors still surface as a plain Python error.

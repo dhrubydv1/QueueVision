@@ -87,8 +87,8 @@ def test_cancel_after_last_frame_stays_completed(settings, clip, monkeypatch) ->
     real_set_report = db.set_report
     holder = {}
 
-    def cancelling_set_report(conn, video_id, report):
-        real_set_report(conn, video_id, report)
+    def cancelling_set_report(conn, video_id, report, **kwargs):
+        real_set_report(conn, video_id, report, **kwargs)
         holder["jobs"].cancel(video_id)  # arrives after process_video returned
 
     monkeypatch.setattr("api.jobs.db.set_report", cancelling_set_report)

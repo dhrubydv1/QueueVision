@@ -22,8 +22,13 @@ __pycache__/
 # Datasets: keep folder structure and README only
 datasets/raw/*
 datasets/processed/*
-datasets/annotations/*
+datasets/videos/*
+datasets/frames/*
+datasets/annotations/**
+!datasets/annotations/**/
 !datasets/*/.gitkeep
+!datasets/annotations/**/.gitkeep
+# datasets/metadata/ and datasets/splits/ are tracked (no ignore rules)
 
 # Generated results: keep folder structure only
 outputs/**
@@ -40,4 +45,4 @@ outputs/**
 .superpowers/
 
 # Local API data (uploads, outputs, SQLite)
-data/
+/data/

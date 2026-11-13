@@ -2,11 +2,31 @@
 
 from __future__ import annotations
 
+import math
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from ai_engine.config import DEFAULT_DEVICE, DEFAULT_MODEL_PATH, PROJECT_ROOT
+
+
+class SettingsError(ValueError):
+    """An environment variable holds an unusable value."""
+
+
+def _positive(env: Mapping[str, str], name: str, kind: type[int] | type[float], default):
+    """Parse a positive int/float from ``env[name]``; unset or empty gives ``default``."""
+    raw = env.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = kind(raw)
+    except ValueError:
+        raise SettingsError(f"{name} must be a number, got {raw!r}") from None
+    if not math.isfinite(value) or value <= 0:
+        raise SettingsError(f"{name} must be a positive number, got {raw!r}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -20,6 +40,9 @@ class ApiSettings:
     port: int = 8000
     model: str = str(DEFAULT_MODEL_PATH)
     device: str = DEFAULT_DEVICE
+    max_queued_jobs: int = 5
+    max_video_seconds: float = 1800.0
+    max_frame_pixels: int = 3840 * 2160
 
     @property
     def db_path(self) -> Path:
@@ -47,4 +70,9 @@ class ApiSettings:
             port=int(port) if port else defaults.port,
             model=env.get("QUEUEVISION_MODEL") or defaults.model,
             device=env.get("QUEUEVISION_DEVICE") or defaults.device,
+            max_queued_jobs=_positive(env, "QUEUEVISION_MAX_QUEUED_JOBS", int, defaults.max_queued_jobs),
+            max_video_seconds=_positive(
+                env, "QUEUEVISION_MAX_VIDEO_SECONDS", float, defaults.max_video_seconds
+            ),
+            max_frame_pixels=_positive(env, "QUEUEVISION_MAX_FRAME_PIXELS", int, defaults.max_frame_pixels),
         )
