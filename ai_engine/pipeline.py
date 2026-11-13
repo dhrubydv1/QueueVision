@@ -1,4 +1,4 @@
-"""Frame-by-frame processing generator shared by file output and future live serving."""
+"""Frame sources and the tracking step shared by file output and live serving."""
 
 from __future__ import annotations
 
@@ -20,7 +20,8 @@ DEFAULT_FPS = 30.0  # used for timestamps only when a source reports no FPS
 class FrameResult:
     """Everything known about one processed frame.
 
-    ``frame`` is the original BGR image (consumers may draw on it).
+    ``frame`` is the BGR image: as decoded from :func:`iter_frame_results`, or annotated in place
+    (blur, zone, people, banner, metrics panel) when returned by ``FrameProcessor.process``.
     ``timestamp_s`` is video time: ``frame_index / source_fps``.
     ``started_at`` is the ``perf_counter`` value when work on this frame
     began (including skipping strided frames and decoding), so consumers can
@@ -40,6 +41,71 @@ def source_fps(loader: VideoLoader) -> float:
     return loader.metadata.fps if loader.metadata.fps > 0 else DEFAULT_FPS
 
 
+@dataclass(frozen=True)
+class SourceFrame:
+    """One decoded frame from a :class:`VideoLoader`, before any tracking.
+
+    ``started_at`` is the ``perf_counter`` value taken before skipping strided frames and decoding
+    this one (see :class:`FrameResult`).
+    """
+
+    frame_index: int
+    timestamp_s: float
+    frame: np.ndarray
+    started_at: float
+
+
+def iter_source_frames(
+    loader: VideoLoader, frame_stride: int = 1, max_frames: int | None = None
+) -> Iterator[SourceFrame]:
+    """Yield every ``frame_stride``-th frame of ``loader``; skipped frames are grabbed, not decoded.
+
+    ``max_frames`` limits the number of *yielded* frames.
+    """
+    if frame_stride < 1:
+        raise ValueError("frame_stride must be >= 1")
+    fps = source_fps(loader)
+    processed = 0
+    while max_frames is None or processed < max_frames:
+        started_at = time.perf_counter()
+        if processed > 0 and not all(loader.skip() for _ in range(frame_stride - 1)):
+            return
+        frame = loader.read()
+        if frame is None:
+            return
+        frame_index = processed * frame_stride
+        processed += 1
+        yield SourceFrame(frame_index, frame_index / fps, frame, started_at)
+
+
+def track_frame(
+    tracker: PersonTracker,
+    queue_analyzer: QueueAnalyzer | None,
+    frame: np.ndarray,
+    frame_index: int,
+    timestamp_s: float,
+    frame_size: tuple[int, int],
+    started_at: float,
+) -> FrameResult:
+    """Run the tracker and (optionally) the queue analyzer on one frame. Draws nothing."""
+    people = tracker.update(frame)
+    inference_seconds = tracker.last_inference_seconds
+    queue_state = (
+        queue_analyzer.update(timestamp_s, frame_index, people, frame_size)
+        if queue_analyzer is not None
+        else None
+    )
+    return FrameResult(
+        frame_index=frame_index,
+        timestamp_s=timestamp_s,
+        frame=frame,
+        people=people,
+        queue=queue_state,
+        inference_seconds=inference_seconds,
+        started_at=started_at,
+    )
+
+
 def iter_frame_results(
     loader: VideoLoader,
     tracker: PersonTracker,
@@ -53,35 +119,14 @@ def iter_frame_results(
     number of *processed* frames. The tracker should already be configured
     for ``source_fps / frame_stride`` and warmed up.
     """
-    if frame_stride < 1:
-        raise ValueError("frame_stride must be >= 1")
-    fps = source_fps(loader)
     frame_size = (loader.metadata.width, loader.metadata.height)
-    processed = 0
-    while max_frames is None or processed < max_frames:
-        started_at = time.perf_counter()
-        if processed > 0 and not all(loader.skip() for _ in range(frame_stride - 1)):
-            return
-        frame = loader.read()
-        if frame is None:
-            return
-        frame_index = processed * frame_stride
-        timestamp_s = frame_index / fps
-
-        people = tracker.update(frame)
-        inference_seconds = tracker.last_inference_seconds
-        queue_state = (
-            queue_analyzer.update(timestamp_s, frame_index, people, frame_size)
-            if queue_analyzer is not None
-            else None
-        )
-        processed += 1
-        yield FrameResult(
-            frame_index=frame_index,
-            timestamp_s=timestamp_s,
-            frame=frame,
-            people=people,
-            queue=queue_state,
-            inference_seconds=inference_seconds,
-            started_at=started_at,
+    for source in iter_source_frames(loader, frame_stride, max_frames):
+        yield track_frame(
+            tracker,
+            queue_analyzer,
+            source.frame,
+            source.frame_index,
+            source.timestamp_s,
+            frame_size,
+            source.started_at,
         )

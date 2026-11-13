@@ -372,3 +372,25 @@ def _update():
     return FrameUpdate(
         frame_index=0, frames_total=10, timestamp_s=0.0, people_in_frame=0, processing_fps=1.0, queue=None
     )
+
+
+def test_start_waits_longer_than_the_sqlite_busy_timeout():
+    from api import jobs
+
+    assert jobs.READY_TIMEOUT_S > db.BUSY_TIMEOUT_S
+
+
+def test_start_uses_ready_timeout(settings, monkeypatch):
+    from api import jobs
+
+    monkeypatch.setattr(jobs, "READY_TIMEOUT_S", 0.2)
+    release = threading.Event()
+    real_init = db.init_db
+    monkeypatch.setattr(db, "init_db", lambda c: (release.wait(WAIT), real_init(c)))
+    manager = JobManager(settings, tracker_factory=lambda: FakeTracker())
+    try:
+        with pytest.raises(RuntimeError, match="did not start"):
+            manager.start()
+    finally:
+        release.set()
+        manager.stop()

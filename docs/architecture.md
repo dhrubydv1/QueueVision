@@ -6,7 +6,7 @@
  source (file / webcam)
         │
  ┌──────▼──────┐  frames   ┌─────────────────────────────────────────────┐
- │ VideoLoader │──────────►│ pipeline.iter_frame_results()  (generator)  │
+ │ VideoLoader │──────────►│ pipeline.iter_source_frames → track_frame   │
  │  (OpenCV)   │ skip()    │                                             │
  └─────────────┘           │  PersonTracker ── PersonDetector (YOLO/CoreML)
                            │   ByteTrack settings from TrackerSettings   │
@@ -17,7 +17,8 @@
                            └──────────────────┬──────────────────────────┘
                                               │ FrameResult
           ┌───────────────────────────────────┴──────────────────────────────────┐
-          │ run_tracking.process_video (one consumer; the Sprint 4 API runs it too)    │
+          │ run_tracking.process_video: iter_source_frames → FrameProcessor.process   │
+          │   → RunWriters → record (the Sprint 4 API runs it too)                │
           │  blur_heads → draw zone / service point → draw_people                 │
           │  → draw_alert_banner (when active) → draw_metrics_panel               │
           │  → VideoWriter → ffmpeg H.264                                         │
@@ -168,8 +169,43 @@ file is named by content hash in `<tmp>/queuevision/trackers/`.
 
 ### Pipeline (`ai_engine/pipeline.py`)
 `iter_frame_results(loader, tracker, queue_analyzer, frame_stride, max_frames)`
-skips, decodes, tracks, runs the analyzer and yields `FrameResult`. It does no
-drawing, writing or timing aggregation.
+is kept as a compatibility generator (used by tests): it skips, decodes,
+tracks, runs the analyzer and yields `FrameResult`; `process_video` does not
+use it. It does no drawing, writing or timing aggregation. It is built from two parts:
+`iter_source_frames(loader, frame_stride, max_frames)` (the file side: stride
+skipping, timestamps, `started_at`) and `track_frame(...)` (tracker plus
+analyzer, no drawing).
+
+### Per-frame step (`ai_engine/frame_processor.py`)
+`FrameProcessor(tracker, camera, *, blur_heads, head_fraction, panel_position,
+stitching, stitch_diagnostics, frame_size)` is the per-frame step that does not
+depend on a file, a known frame count or a video writer. It owns the
+`QueueAnalyzer` and a `PerformanceTracker`.
+
+* `process(frame, frame_index, timestamp_s, *, total_frames=None, started_at=None) -> FrameResult`
+  tracks, runs the queue analysis and draws (blur, zone, service point, people,
+  alert banner, metrics panel) on the frame in place. `total_frames=None` draws
+  "Frame N" without a total.
+* `draw(result, total_frames=None)` is the drawing part on its own.
+* `record(result)` records the performance sample (processing time is now minus
+  `started_at`).
+
+`process_video` is now setup, loop and teardown: loader, `iter_source_frames`,
+`processor.process`, `RunWriters.write_video`, `processor.record`,
+`RunWriters.add`, then the callbacks. `RunWriters` (in `run_tracking.py`) opens
+the video, MOT, time-series, zone-event, waits, alerts and event-log writers in
+the order the old function did.
+
+**What a live camera worker must still do.** The seam does not do these for
+you: call `tracker.configure(effective_fps)` and `tracker.warmup()` before the
+first frame (the device is read from `tracker.detector.device`), and call
+`processor.record(result)` after the frame's sinks have finished, because the
+rolling FPS drawn on later frames comes from those samples and the processing
+time is meant to include the sink work. Passing `started_at` is optional but
+without it the processing time is not meaningful. The golden test
+(`tests/test_frame_processor_golden.py`) compares every output file of the old
+and new code byte for byte (video by frame hash), with the clock frozen, so it
+does not lock the order of the timing calls.
 
 ### Visualization (`ai_engine/visualization/`)
 Pure drawing functions: `draw_queue_zone`, `draw_service_point` (magenta),
@@ -199,9 +235,17 @@ ground truth. CLI wrappers are `ai_engine/evaluate_tracking.py`,
 `make_annotation_kit.py` (frames, queue-count CSV and waiting-time ground-truth
 template) and `export_model.py`.
 
+### One queue zone and one service point per camera
+A camera config describes exactly one queue zone and at most one service point
+(a line or a zone, not both). A place with two counters or two queues needs two
+camera configs (one per queue view); the engine has no multiple queues per
+camera. Zones are drawn with `ai_engine/tools/draw_zone.py`
+(`--video`, `--config`, optional `--target {queue_zone,service_zone,service_line}`,
+`--points`, `--preview`, `--camera-id`, `--frame-index`; see the README, section 10).
+
 ### Command line (`ai_engine/run_tracking.py`)
-`process_video(source, tracker, RunOptions)` is the one consumer of the
-generator that writes files; `main()` parses flags and maps known errors to
+`process_video(source, tracker, RunOptions)` is the one path that writes files:
+`iter_source_frames` → `FrameProcessor.process` → `RunWriters` → `record`; `main()` parses flags and maps known errors to
 exit code 1.
 
 ## API layer (`api/`, Sprint 4)
@@ -225,11 +269,37 @@ exit code 1.
 | `api/settings.py` | `ApiSettings`: data dir, camera dir, upload limit, host, port, model, device (environment variables) |
 | `api/db.py` | `sqlite3` schema and repository functions; WAL; foreign keys on; one connection per thread |
 | `api/jobs.py` | `JobManager`, message builders (`progress`, `event`, `status`), live state and subscriber fan-out |
-| `api/main.py` | `create_app(settings, tracker_factory)`; REST routes, WebSocket route (with Origin check), preview routes, accuracy route, `/legacy` test page, dashboard catch-all; `app` for uvicorn |
+| `api/main.py` | `create_app(settings, tracker_factory)`: assembly only (settings, `JobManager`, lifespan, exception handler, `include_router` calls); `app` for uvicorn |
+| `api/deps.py` | Shared dependencies read from `request.app.state` (`get_settings`, `get_jobs`, `get_preview`, `SettingsDep`, `JobsDep`), `open_db`, `origin_allowed`, `contained_path`, `get_record`. No module-level app state |
+| `api/routes/` | One router module per area, listed below |
 | `api/preview.py` | `PreviewStore` (latest head-blurred JPEG per processing run, memory only, at most 5 per second), `render_preview`, `mjpeg_part` |
 | `api/models.py` | Pydantic response models |
 | `api/static/index.html` | Demo test page (plain HTML/CSS/JS, no build step, no CDN) |
 | `api/__main__.py` | `python -m api` |
+
+**Router layout (`api/routes/`).** `create_app` includes the routers in this
+order, which is the order the routes are matched in:
+
+| Order | Module | Routes |
+|---|---|---|
+| 1 | `health.py` | `GET /api/health` |
+| 2 | `cameras.py` | `GET /api/cameras` |
+| 3 | `videos.py` `router` | list, detail, events, waits, alerts, `POST .../alerts/{alert_id}/ack`, timeseries, report, video, `timeseries.csv` |
+| 4 | `preview.py` | `preview.jpg`, `preview.mjpg` |
+| 5 | `videos.py` `mutation_router` | `POST .../cancel`, `DELETE /api/videos/{video_id}` |
+| 6 | `websocket.py` | `/ws/videos/{video_id}` (Origin check before `accept`) |
+| 7 | `accuracy.py` | `GET /api/accuracy` |
+| 8 | `videos.py` `upload_router` | `POST /api/videos`, using the `UploadGuardRoute` route class |
+| 9 | `static.py` | `/legacy` static mount (`mount_legacy(app)`), the `/legacy` redirect, then the dashboard catch-all, always last |
+
+The videos routes are split into three routers only so that the generated
+OpenAPI document keeps its path order (the preview routes sit between the read
+routes and cancel/delete; upload comes after the WebSocket and accuracy
+routes). The split is not about URL matching. `dashboard/openapi.json` was
+byte-identical before and after the split, and `tests/test_api.py`
+(`test_route_registration_order`) pins that the catch-all is the last route and
+the `/legacy` mount precedes its redirect. The upload guard route class wraps
+only `POST /api/videos`.
 
 **Job and thread model.** One worker thread processes one video at a time;
 other uploads wait in a FIFO queue. The worker owns its SQLite connection and
@@ -248,6 +318,34 @@ keeping the partial results.
 **SQLite tables** (`data/queuevision.db`): `schema_meta`, `videos`, `events`,
 `waits`, `alerts` and `timeseries`; the last four reference `videos` with
 `ON DELETE CASCADE`. Columns are listed in [api.md](api.md).
+
+**Adding a schema migration.** `_SCHEMA` in `api/db.py` stays the version 1
+schema and is never edited. To change the schema, write
+`_migrate_N_to_M(conn)` (plain SQL on the given connection; do not commit) and
+append `(M, _migrate_N_to_M)` to `MIGRATIONS` with consecutive versions. `init_db`
+creates the version 1 tables for a new database and applies every migration;
+for an existing older database it first copies the file to
+`<db>.bak-v<from>-<UTC timestamp>` (SQLite backup API, WAL-safe), then runs each
+migration and its `schema_version` bump in one transaction, so a failing
+migration rolls back, the version stays and the backup remains. A database
+already at the latest version is untouched. Add a test that builds the previous
+schema from its DDL, runs `init_db`, and checks the rows, the version and the
+backup (see `tests/test_api_db.py`).
+
+Each migration runs under `BEGIN IMMEDIATE` and re-reads `schema_version`
+inside the transaction, so two processes starting at once apply it only once;
+the backup is taken after the write lock is held, from a separate reader
+connection. Connections wait up to 30 s for a lock.
+
+**Migration list** (`MIGRATIONS` in `api/db.py`):
+
+| Version | Function | Change |
+|---|---|---|
+| 1 | `_SCHEMA` (not a migration) | Tables `schema_meta`, `videos`, `events`, `waits`, `alerts`, `timeseries` |
+| 2 | `_migrate_1_to_2` | `alerts.acknowledged_at` (UTC ISO 8601 text, NULL until acknowledged) and `alerts.acknowledged_by` (nullable text; always NULL until a login exists) |
+
+`POST /api/videos/{video_id}/alerts/{alert_id}/ack` sets `acknowledged_at` once
+(repeat calls keep the first time); `GET .../alerts` returns both columns.
 
 ## Dashboard, serving and live preview (Sprint 7)
 
@@ -273,7 +371,7 @@ hand-written message and file shapes. Design tokens are Tailwind theme variables
 `app/globals.css`. The browser only formats and draws; every number comes from
 the API, and `Unknown` / `Insufficient data` are shown as the engine reports them.
 
-**Serving (`api/main.py`).** The routes are registered in this order: API and
+**Serving (`api/routes/static.py`, assembled in `api/main.py`).** The routes are registered in this order: API and
 WebSocket routes, `/legacy` (static mount plus a redirect from `/legacy`), then a
 catch-all `GET`/`HEAD` route for the dashboard. The catch-all returns a file under
 `dashboard/out/` if it exists, else `<path>.html`, else `<path>/index.html`, else
@@ -406,7 +504,7 @@ config  ◄── detection/types ◄── queue/*  ◄── pipeline ◄─�
 | Events only for confirmed members | Walkers through the zone must not look like queue joins |
 | Video time, never wall-clock | Results are reproducible and independent of processing speed |
 | Explicit device errors | Reports must not claim acceleration that was not used |
-| Generator instead of a monolithic loop | File output, tests and a future live API share one processing path |
+| Per-frame step (`FrameProcessor`) separate from the source and the writers | File runs and the planned live cameras share one per-frame path; only the frame source and the outputs differ |
 | Join time = first time in the zone (earliest across stitched tracks), not the confirmation time | Confirmation only happens after the dwell time; using it would shorten every wait by about the dwell time |
 | Abandon is decided after `max(exit_grace_seconds, stitching max_gap_seconds)` and only when a service point exists | A person may reappear under a new ID within the stitching gap; without a service point nobody can be served, so "abandoned" would be meaningless |
 | Service point must lie inside (or right at the edge of) the queue zone | If a member must walk outside the zone for longer than the abandon timeout to reach it, they are recorded as abandoned. Observed with stitching off, where the timeout equals `exit_grace_seconds` |
@@ -424,8 +522,9 @@ config  ◄── detection/types ◄── queue/*  ◄── pipeline ◄─�
 * **Sprint 4 (done; see [api.md](api.md))** runs `process_video` with its
   `on_frame` hook, so the API gets the annotated video and every CLI output as
   well as live numbers. The notes below were the plan and still apply to a
-  future live-camera source: iterate `iter_frame_results()`
-  directly (a live `VideoLoader` source already exists) and serialize
+  future live-camera source: build on `FrameProcessor` with
+  `pipeline.iter_source_frames` / `track_frame` (a live `VideoLoader` source
+  already exists) and serialize
   `FrameResult` fields, `PersonDetection.to_dict()` and each event's
   `to_dict()`; the contract is [event_schema.md](event_schema.md) (schema
   version 1.0, with suggested SQLite tables). Scope every `track_id` and

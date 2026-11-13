@@ -12,6 +12,8 @@ vi.mock("@/lib/api", async (orig) => ({
   getEvents: vi.fn().mockResolvedValue([]),
   getCameras: vi.fn().mockResolvedValue([{ id: "cam", max_queue_length: 8, smoothing_window_s: 2 }]),
   cancelRun: vi.fn(),
+  getAlerts: vi.fn().mockResolvedValue([]),
+  ackAlert: vi.fn(),
 }));
 import * as api from "@/lib/api";
 import { LiveRunView } from "./LiveRunView";
@@ -38,7 +40,10 @@ function view() {
 }
 
 describe("LiveRunView", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getAlerts).mockResolvedValue([]);
+  });
 
   it("shows raw count line, people note, service words and Live chip", async () => {
     setSocket();
@@ -55,6 +60,57 @@ describe("LiveRunView", () => {
     view();
     expect(await screen.findByText("Queue length above 8")).toBeInTheDocument();
     expect(screen.getByText("Live · congested")).toBeInTheDocument();
+  });
+
+  const alertRow = (over = {}) => ({
+    alert_id: 11, video_id: 7, timestamp_s: 2, event_type: "congestion_start", queue_length: 9, reasons: "r",
+    acknowledged_at: null, acknowledged_by: null, ...over,
+  });
+  const active = () => setSocket({ progress: progress({ alert_active: true, alert_reasons: ["Queue length above 8"] }) });
+
+  it("acknowledges the latest congestion_start row and hides the banner", async () => {
+    vi.mocked(api.getAlerts).mockResolvedValue([
+      alertRow({ alert_id: 3 }), alertRow({ alert_id: 4, event_type: "congestion_end" }), alertRow({ alert_id: 11 }),
+    ] as never);
+    vi.mocked(api.ackAlert).mockResolvedValue(alertRow({ alert_id: 11, acknowledged_at: "2026-11-13T10:00:00Z" }) as never);
+    active();
+    view();
+    const button = await screen.findByRole("button", { name: "Acknowledge" });
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+    expect(api.ackAlert).toHaveBeenCalledWith(7, 11);
+    await waitFor(() => expect(screen.queryByText("Queue length above 8")).toBeNull());
+  });
+
+  it("hides the banner when the current alert is already acknowledged (reload)", async () => {
+    vi.mocked(api.getAlerts).mockResolvedValue([alertRow({ acknowledged_at: "2026-11-13T10:00:00Z" })] as never);
+    active();
+    view();
+    await waitFor(() => expect(api.getAlerts).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText("Queue length above 8")).toBeNull());
+  });
+
+  it("a new episode after an acknowledged, ended one still shows the banner (not yet recorded)", async () => {
+    vi.mocked(api.getAlerts).mockResolvedValue([
+      alertRow({ alert_id: 3, acknowledged_at: "2026-11-13T10:00:00Z" }), alertRow({ alert_id: 4, event_type: "congestion_end" }),
+    ] as never);
+    active();
+    view();
+    await waitFor(() => expect(api.getAlerts).toHaveBeenCalled());
+    expect(await screen.findByText("Queue length above 8")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Acknowledge" })).toBeDisabled();
+  });
+
+  it("failed acknowledge shows the API message and keeps the banner", async () => {
+    vi.mocked(api.getAlerts).mockResolvedValue([alertRow()] as never);
+    vi.mocked(api.ackAlert).mockRejectedValue(new api.ApiError("Alert 11 not found", 404));
+    active();
+    view();
+    const button = await screen.findByRole("button", { name: "Acknowledge" });
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+    expect(await screen.findByText("Alert 11 not found")).toBeInTheDocument();
+    expect(screen.getByText("Queue length above 8")).toBeInTheDocument();
   });
 
   it("shows Offline and an offline banner when the socket is down", async () => {

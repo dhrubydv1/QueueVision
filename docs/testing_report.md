@@ -32,7 +32,7 @@ Fill the Result columns with PASS, FAIL (say what you saw) or N/A. Leave blank w
 | 2 | Overview, lists | "Latest completed runs" (up to 3) and "Recent recorded runs" (up to 10) link to the run; a processing run shows a card whose name links to the Live page, and a "Watch live" link next to it in the "Recent recorded runs" table; the accuracy summary card is present, or says the accuracy data is not generated | | | | |
 | 3 | Runs (`/runs`) | Upload form: Video file, Camera config, Every Nth frame, Blur heads, Process in real time, Start. The "All runs" table has columns Name, Camera, Status, Created, Frames processed (newest first; there is no sorting). The Created column is a clock time with the browser's zone (shows "NPT" only when the browser zone is Asia/Kathmandu, which means Nepal Time). Status chips are readable; no horizontal scroll on phone | | | | |
 | 4 | Live (`/live?id=N`), real-time run | Upload with "Process in real time" ticked: the page opens on `/live`. The preview shows video with **heads blurred**; Queue length, Predicted wait, Service rate and People in frame update; the queue chart and Events list grow; "Last update HH:MM:SS" appears. **Cancel run** stops the run and the chip changes to Cancelled; "Open the recorded run" then appears | | | | |
-| 5 | Live, congestion banner | When congestion is active a "Congestion alert" banner appears with its reasons and the chip reads "Live · congested". The note "Acknowledge hides this banner on this screen only; nothing is recorded." is visible without hovering, and the **Acknowledge** button hides the banner. (This note is on the Live page only.) | | | | |
+| 5 | Live, congestion banner | When congestion is active a "Congestion alert" banner appears with its reasons and the chip reads "Live · congested". The note "Acknowledging records the time for this alert." is visible without hovering, and the **Acknowledge** button saves the acknowledgement and hides the banner; after a reload the banner stays hidden for that alert, and the Alerts tab of the run shows "Acknowledged HH:MM:SS NPT". (This note is on the Live page only.) | | | | |
 | 6 | Live, offline | Stop the API while the Live page is open: the chip changes to **Offline**, a message "Connection lost. Reconnecting; values below are not current." appears, and the figures are dimmed with a "Last update" line. When the API returns the chip goes back to Live and the message goes away. No blank page | | | | |
 | 7 | Recorded run (`/run?id=N`) | Pick a finished run. Header shows the status chip, "every Nth frame · heads blurred · fast or real time" and the camera; summary cards; the queue chart. The video is the browser's plain video control: press play and drag the scrubber to seek (there is no click-to-seek from the chart or lists). Heads are blurred. A run made with Blur heads off shows a note instead of the video. "Report (JSON)" and "Time series (CSV)" links work; Delete asks "Delete run N?" and Keep cancels it | | | | |
 | 8 | Recorded run, tabs | Three tabs: **Waits**, **Events**, **Alerts**. They switch by click and by Left/Right arrows, Home and End, with focus and selection moving together. Waits lists Person, Joined, Service, Wait, Abandoned; Alerts lists Time, Event, Queue length, Reasons. Congestion rows read "Congestion started" and "Congestion ended" | | | | |
@@ -44,6 +44,25 @@ Fill the Result columns with PASS, FAIL (say what you saw) or N/A. Leave blank w
 Tester name, date, browser and OS versions, device: ______________________________
 
 Anything that fails: write what you did, what you expected and what happened, and attach the screenshot.
+
+## Fix pass, session 1 (2026-11-13): automated results
+
+Branch `fix/structure`. Baselines are `main` at `b5bb0f9`; final numbers were run at the end of the session
+(Python 3.11 `.venv`, Node 22 via nvm). The browser checklist above is still pending for a person.
+
+| Command | Baseline | Final |
+|---|---|---|
+| `.venv/bin/pytest -q` | 454 passed | 469 passed |
+| `.venv/bin/pytest -q -m "not integration"` | 443 passed, 11 deselected | 458 passed, 11 deselected |
+| `ruff check .` / `ruff format --check .` | clean | clean (135 files formatted) |
+| `npm run lint` / `typecheck` / `build` | clean | clean |
+| `npm test` (Vitest) | 125 passed | 133 passed |
+| `npm run e2e` | 12/12 | 14/14 (Chromium 7, WebKit 7), run by Task 4, not re-run for this table |
+
+New tests: the golden test of the per-frame step (`tests/test_frame_processor_golden.py`), the migration and
+concurrent-start tests (`tests/test_api_db.py`), the acknowledge route and route-order tests
+(`tests/test_api.py`), Vitest for the Acknowledge button, and one Playwright test that acknowledges a real
+alert on `cad_seq27`, reloads and finds it in the Alerts tab. Details: [fix_structure_report.md](fix_structure_report.md).
 
 ## Sprint 8: real-time pacing gap (2026-11-13)
 
