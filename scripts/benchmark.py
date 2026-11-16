@@ -395,7 +395,13 @@ def build_tracker(args: argparse.Namespace, fps: float) -> Any:
     detector = PersonDetector(
         model_path=args.model, confidence=args.confidence, image_size=args.imgsz, device=args.device
     )
-    return PersonTracker(detector, TrackerSettings(new_track_confidence=args.confidence), effective_fps=fps)
+    settings = TrackerSettings(
+        new_track_confidence=args.confidence,
+        tracker_type=args.tracker,
+        reid=args.reid == "on",
+        gmc_method=args.gmc_method,
+    )
+    return PersonTracker(detector, settings, effective_fps=fps)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -407,6 +413,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--model", default=str(config.DEFAULT_MODEL_PATH))
     p.add_argument("--imgsz", type=int, default=config.IMAGE_SIZE)
     p.add_argument("--confidence", type=float, default=config.CONFIDENCE)
+    p.add_argument("--tracker", default="bytetrack", choices=["bytetrack", "botsort"])
+    p.add_argument("--reid", default="off", choices=["on", "off"], help="botsort only")
+    p.add_argument(
+        "--gmc-method", default=None, help="botsort only; default keeps Ultralytics' bundled sparseOptFlow"
+    )
     p.add_argument("--max-frames", type=int, default=None)
     p.add_argument("--warmup-frames", type=int, default=DEFAULT_WARMUP_FRAMES)
     p.add_argument("--output", type=Path, default=None)
@@ -418,6 +429,8 @@ def main(argv: list[str] | None = None) -> int:
         p.error("--tracks requires --camera-config")
     if args.warmup_frames < 0:
         p.error("--warmup-frames must be >= 0")
+    if args.tracker != "botsort" and (args.reid == "on" or args.gmc_method):
+        p.error("--reid/--gmc-method require --tracker botsort")
 
     started = datetime.now(UTC).isoformat(timespec="seconds")
     if replay:
