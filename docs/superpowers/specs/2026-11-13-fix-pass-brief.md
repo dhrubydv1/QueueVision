@@ -46,9 +46,42 @@ Needs a person: filling the waiting-time sheets; recording own footage with writ
 - README and `docs/architecture.md`: a camera config has one queue zone and one service point (two counters need two configs); zones are drawn with `ai_engine/tools/draw_zone.py`.
 - Document the reserved `_observed` clip-id suffix from `scripts/export_accuracy.py` in `datasets/README.md`.
 
-## SESSIONS 2–4
+## SESSION 2 — EVIDENCE: UNCERTAINTY AND COMPARISONS (`fix/evaluation`)
 
-Session 2 (evaluation protocol and adoption rule, clip-level bootstrap, IoU 0.5/0.3 attribution, YOLO11n vs 11s, ByteTrack vs BoT-SORT ± ReID, Accuracy page intervals), session 3 (`frame` privacy mode; pacing slowdown experiments) and session 4 (labelling page, scoring, predicted-vs-actual) are recorded in full from the team's prompt when each starts.
+Current figures to reproduce first (Sprint 5/6 reports): queue length, held-out (test) split, Sprint 4 rules: MAE 1.619, bias +0.960, within ±1 0.537 (285 frames, 4 clips); validation MAE 1.176. MOT17-04 / MOT17-09 IDF1 0.412 / 0.508 (ByteTrack, no stitching). Reproduce them from the existing scripts before adding anything; if they do not reproduce exactly, stop and report why.
+
+### 2a. Write the adoption rule first
+Before running any comparison, add `docs/evaluation_protocol.md` and commit it on its own. It must say:
+- Which clips are tuning (val: seq10, 25, 26) and held-out (test: seq27, 39, 40, 41), as in `datasets/splits/`.
+- A new detector or tracker becomes the default **only if** (a) its test-split queue-length MAE is lower than the current default's by more than the half-width of the paired clip-bootstrap 95% interval of the difference, (b) its validation MAE is not worse, and (c) end-to-end processing on MPS at the default stride stays at or above 1.0× real time on cad_seq27. Otherwise it is reported and not adopted.
+- Nothing is tuned on test clips. Thresholds stay at the Sprint 4 defaults.
+
+### 2b. Confidence intervals
+- Add `ai_engine/evaluation/bootstrap.py`: a clip-level (cluster) bootstrap (resample clips with replacement, 10,000 resamples, fixed seed) for MAE, bias and within-±1, and a paired version for differences between two configurations. Frames within a clip are correlated, so also report the per-frame bootstrap but label it "optimistic (ignores within-clip correlation)".
+- Apply it to the queue-length results for val, test and all clips. With 3–4 clips per split the intervals will be wide; report them as they are.
+- Tests with small synthetic data (known answers, seed stability).
+
+### 2c. Error breakdown at two match thresholds
+- Queue-length MAE compares counts and does not use IoU; the error attribution does. Re-run the Sprint 6 attribution at IoU 0.5 and 0.3 and report both side by side. Do not change the default threshold of any metric.
+
+### 2d. Detector comparison: YOLO11n vs YOLO11s
+- Run all 7 CAD queue clips with `--model yolo11s.pt` (downloaded to `ai_engine/models/`, never committed), same camera configs, imgsz 640, MPS. Record queue-length MAE / bias / within-±1 per clip and per split with bootstrap intervals, the Sprint 6 error attribution, peak RSS, and end-to-end fps from `scripts/benchmark.py` on cad_seq27.
+- Also run MOT17-09 and MOT17-04 tracking evaluation (IDF1, MOTA, ID switches) with each detector.
+- Apply the adoption rule; report the decision.
+
+### 2e. Tracker comparison: ByteTrack vs BoT-SORT
+- Check in the installed Ultralytics source how BoT-SORT and its re-identification option (`with_reid`, `model`) work in the pinned version, and what global motion compensation (`gmc_method`) costs on the M1.
+- Generate a resolved BoT-SORT YAML the same way `PersonTracker` resolves ByteTrack's (same `new_track_thresh`, `track_buffer` from seconds, input confidence 0.1), so only the algorithm differs. Make the tracker a config/CLI option (`--tracker bytetrack|botsort`, `--reid on|off`), default unchanged.
+- Compare ByteTrack, BoT-SORT without re-identification, and BoT-SORT with re-identification on: MOT17-09/04 (IDF1, MOTA, ID switches); CAD queue-length MAE with intervals; the number of queue joins per labelled person and stitching links; fps and peak RSS on MPS.
+- Apply the adoption rule; report the decision.
+
+### 2f. Show it
+- Extend `scripts/export_accuracy.py` and `/api/accuracy` with the intervals, the two-threshold attribution, and a `comparisons` section (configuration, metric, value, interval, decision), each with its source file. The Accuracy page shows intervals beside the headline numbers ("1.62 people, 95% interval a–b, 4 clips") and a comparison table. Vitest for the new parts.
+- Results and the decisions go in `docs/testing_report.md` with method, sample sizes and limits.
+
+## SESSIONS 3–4
+
+Session 3 (`frame` privacy mode; pacing slowdown experiments) and session 4 (labelling page, scoring, predicted-vs-actual) are recorded in full from the team's prompt when each starts.
 
 ## AFTER THIS PROMPT
 Continue with Sprint 8 session 2 (live cameras), told about: the router layout (1a), the reusable per-frame processor (1b), the migration list (1c), the `frame` privacy mode (3a), and the pacing findings (3b).
