@@ -179,7 +179,6 @@ def own_test_mae_interval(out: Path) -> list[float]:
 
 
 def decide() -> None:
-    a_queue = load(OUT / "A" / "queue_640.json")["variants"]["as_configured"]
     rows: list[dict] = []
     summary: dict = {}
     for name, cfg in CONFIGS.items():
