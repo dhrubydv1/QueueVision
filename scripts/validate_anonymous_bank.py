@@ -38,6 +38,8 @@ def main() -> None:
     ap.add_argument("--tidy", default=str(ROOT / "datasets/raw/anonymous_bank/tidy"))
     ap.add_argument("--out", default=str(ROOT / "outputs/metrics/anonymous_bank_validation.json"))
     a = ap.parse_args()
+    if not (Path(a.raw) / f"{MONTHS[0]}1999.txt").exists():
+        sys.exit(f"No raw data in {a.raw}. Run scripts/fetch_anonymous_bank.py first.")
     tidy = Path(a.tidy)
     tidy.mkdir(parents=True, exist_ok=True)
     per: dict = {}

@@ -88,6 +88,8 @@ def main() -> None:
     figs.mkdir(parents=True, exist_ok=True)
 
     records = []
+    if not (Path(a.raw) / f"{MONTHS[0]}1999.txt").exists():
+        sys.exit(f"No raw data in {a.raw}. Run scripts/fetch_anonymous_bank.py first.")
     for m in MONTHS:
         records.extend(parse_month(Path(a.raw) / f"{m}1999.txt"))
     kept = [r for r in records if r.outcome != "PHANTOM"]
@@ -182,6 +184,24 @@ def main() -> None:
             "never replaces the v1 headline.",
             **s1,
         }
+    }
+
+    # Share of served AGENT calls (primary types, ser_start set) that never queued.
+    types = QUEUE_DEFINITIONS["primary"]
+    share: dict = {}
+    for r in kept:
+        if r.outcome == "AGENT" and r.ser_start_ts is not None and (types is None or r.type in types):
+            split = months_split(r.date.month)
+            for key in (split, "all_months"):
+                d = share.setdefault(key, {"unqueued": 0, "total": 0})
+                d["total"] += 1
+                d["unqueued"] += 0 if r.queued else 1
+    for d in share.values():
+        d["share"] = d["unqueued"] / d["total"]
+    result["unqueued_agent_share"] = {
+        "definition": "Primary-type AGENT calls with ser_start set: count not queued, total, and share. "
+        "'test' is November-December.",
+        **share,
     }
 
     # Little's law, primary queue, all months.

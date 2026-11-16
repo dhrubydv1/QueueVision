@@ -99,7 +99,7 @@ Service-rate window of the formula on the training months, primary queue, formul
 
 ### Post-hoc S1: "all service starts" (protocol v2 addendum; separate; post hoc)
 
-**Why.** Review of the scoring code found that the version-1 service events counted only calls that queued. Agents also served calls that never queued: 25,255 of 61,673 AGENT calls of the primary types with a service start in November-December (41 %) (computed with the repository parser on the local raw files). The v1 service rate therefore undercounts how fast the agents were working, and the formula over-predicts. The video engine counts every service start it sees at the service point, so S1 is closer to what the engine would see.
+**Why.** Review of the scoring code found that the version-1 service events counted only calls that queued. Agents also served calls that never queued: 25,255 of 61,673 AGENT calls of the primary types with a service start in November-December (41 %; stored as `unqueued_agent_share.test` in `outputs/metrics/anonymous_bank_wait_eval.json`: 25,255 unqueued of 61,673, share 0.4095). The v1 service rate therefore undercounts how fast the agents were working, and the formula over-predicts. The video engine counts every service start it sees at the service point, so S1 is closer to what the engine would see.
 
 **Definition.** Identical to v1, except that service events are the `ser_start` of every AGENT call of the queue's types with a service start, queued or not, strictly before the prediction time. Queue length, ground truth, baselines, splits, metrics and bootstrap are unchanged.
 
@@ -158,11 +158,11 @@ For each hour of the day: time-average queue length divided by (arrival rate x m
 - The formula assumes a steady service rate over the last 5 minutes. The event-driven replay calls `estimate()` at event times, not once per video frame, so the formula's low-high range (the min-max of recent rates) may differ from what the video engine would give; the range coverage here is a property of this replay.
 - The queue lengths in the logs are exact; the video engine's are noisy counts. The logs say nothing about how good camera counts are.
 - Intervals reflect day-to-day variation within one year at one centre, not variation between centres.
-- S1 is post hoc; the 41 % figure is the November-December share and was computed on the raw files, not stored in the eval JSON.
+- S1 is post hoc; the 41 % figure is the November-December share, stored in the eval JSON as `unqueued_agent_share` (test 25,255 of 61,673; train 89,549 of 223,244 = 40 %; validation 33,537 of 52,755 = 64 %).
 
 ### What this supports, and what it does not
 
-Supports: on this phone queue, the formula (queue length divided by the last five minutes' service rate) has a positive bias of about 40 s, is less accurate than a one-line baseline, and is not rescued by counting all service starts; a regression of wait on queue length does better on the same inputs.
+Supports: on this phone queue, the formula (queue length divided by the last five minutes' service rate) has a positive bias of about 40 s, is less accurate than a one-line baseline, and is not rescued by counting all service starts (post hoc, S1); a regression of wait on queue length does better on the same inputs.
 
 Does not support: any claim about QueueVision's waiting-time accuracy on cameras (the cameras were not involved); any claim that the formula would work or fail at a bank branch, a shop or an airport; any claim about the video counts. Whether a different rate estimate would do better on camera data was not tested.
 

@@ -6,7 +6,7 @@ import { ApiError } from "@/lib/api";
 import type {
   AccuracyData, CallCentreMethod, CallCentreMethodKey, CountErrorCategory, Interval, MissingSource,
 } from "@/lib/accuracy-types";
-import { formatNumber, formatSigned } from "@/lib/format";
+import { formatCount, formatNumber, formatSigned } from "@/lib/format";
 import { EmptyState } from "@/components/EmptyState";
 import { MetricCard } from "@/components/MetricCard";
 import { NOT_GENERATED } from "@/components/AccuracySummaryCard";
@@ -242,7 +242,7 @@ function CallCentreCard({ data }: Readonly<{ data: AccuracyData }>) {
         </table>
       </div>
       <p className="num mt-3 text-xs text-text-3">
-        {`${cc.n_calls} answered calls over ${cc.n_days} held-out test days (Nov–Dec 1999) · protocol v${cc.protocol_version} · range coverage ${formatNumber((cc.methods.predictor.range_coverage?.value ?? NaN) * 100, 0)}% · ${cc.interval}`}
+        {`${formatCount(cc.n_calls)} answered calls over ${cc.n_days} held-out test days (Nov–Dec 1999) · protocol v${cc.protocol_version} · range coverage ${formatNumber((cc.methods.predictor.range_coverage?.value ?? NaN) * 100, 0)}% · ${cc.interval}`}
       </p>
       <p data-testid="call-centre-s1" className="mt-2 text-sm text-text-2">
         {`Post hoc, not the headline: counting every service start (protocol v${cc.post_hoc_s1.protocol_version}) gives ${formatNumber(s1.mae_s.value, 1)} s mean error and ${formatNumber(s1.coverage.value * 100, 0)}% coverage, worse than ${beating} of the 3 baselines.`}

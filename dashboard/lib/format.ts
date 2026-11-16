@@ -25,6 +25,11 @@ export function formatNumber(n: number | null | undefined, digits: number): stri
   return n === null || n === undefined || !Number.isFinite(n) ? DASH : n.toFixed(digits);
 }
 
+/** Whole number with thousands separators (en-US), e.g. 36,479. */
+export function formatCount(n: number | null | undefined): string {
+  return n === null || n === undefined || !Number.isFinite(n) ? DASH : Math.round(n).toLocaleString("en-US");
+}
+
 /** Number with an explicit sign (true minus sign U+2212 for negatives). */
 export function formatSigned(n: number, digits: number): string {
   const text = formatNumber(Math.abs(n), digits);

@@ -141,7 +141,7 @@ describe("AccuracyView", () => {
     });
     const cc: PredictorOnCallCentreLogs = {
       source: "outputs/metrics/anonymous_bank_wait_eval.json", citation: "Made-up citation", caveat: "c",
-      protocol_version: 1, interval: "95% test interval", seed: 1, queue: "primary", split: "test", n_days: 5, n_calls: 777,
+      protocol_version: 1, interval: "95% test interval", seed: 1, queue: "primary", split: "test", n_days: 5, n_calls: 36479,
       methods: methods(0), paired_mae_difference: {}, hang: { n_hang: 1, n_hang_with_prediction: 1, n_hung_up_after_longer_than_predicted: 0 },
       post_hoc_s1: { post_hoc: true, protocol_version: 2, definition: "d", n_days: 5, n_calls: 777, methods: methods(-20), paired_mae_difference: {}, hang: { n_hang: 1, n_hang_with_prediction: 1, n_hung_up_after_longer_than_predicted: 0 } },
     };
@@ -155,7 +155,7 @@ describe("AccuracyView", () => {
       expect(rows[0]).toHaveTextContent("90 [89, 91]");
       expect(rows[0]).toHaveTextContent("+40.0");
       expect(rows[3]).toHaveTextContent("60.0 [59.0, 61.0]");
-      expect(screen.getByText(/777 answered calls over 5 held-out test days/)).toBeInTheDocument();
+      expect(screen.getByText(/36,479 answered calls over 5 held-out test days/)).toBeInTheDocument();
       expect(screen.getByTestId("call-centre-s1")).toHaveTextContent(/Post hoc, not the headline.*80\.0 s.*worse than 2 of the 3 baselines/);
       expect(screen.getByText(/Made-up citation/)).toBeInTheDocument();
       // the camera card is unchanged

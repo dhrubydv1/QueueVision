@@ -139,3 +139,20 @@ def test_queued_from_exactly_midnight():
     assert r.queued and r.q_start_ts == 0 and r.q_exit_ts == 27
     never = parse_line(row(qs="0:00:00", qx="0:00:00", qt="0"))
     assert not never.queued
+
+
+def test_scripts_exit_with_fetch_hint_when_raw_data_missing(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for script in ("validate_anonymous_bank.py", "score_anonymous_bank.py"):
+        proc = subprocess.run(
+            [sys.executable, "-I", str(root / "scripts" / script), "--raw", str(tmp_path)],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode != 0
+        assert "fetch_anonymous_bank.py" in proc.stderr
+        assert "Traceback" not in proc.stderr
