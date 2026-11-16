@@ -20,6 +20,26 @@ export function missingInputs(): string | null {
   return null;
 }
 
+function syntheticCallCentreMethod(mae: number, bias: number) {
+  const iv = (value: number) => ({ value, lo: value - 1, hi: value + 1 });
+  return {
+    n_agent: 1234, n_covered: 1000, coverage: { value: 0.81, lo: 0.8, hi: 0.82 },
+    mae_s: iv(mae), rmse_s: iv(mae + 10), median_abs_error_s: iv(mae - 20), bias_s: iv(bias),
+    within_30s: iv(0.2), within_60s: iv(0.4), range_coverage: iv(0.25),
+  };
+}
+
+function syntheticCallCentreMethods(offset: number) {
+  return {
+    predictor: syntheticCallCentreMethod(123.4 + offset, 11.1),
+    les: syntheticCallCentreMethod(111.1, -22.2),
+    recent_mean: syntheticCallCentreMethod(99.9, -3.3),
+    regression: syntheticCallCentreMethod(88.8, 4.4),
+  };
+}
+
+const SYNTHETIC_HANG = { n_hang: 10, n_hang_with_prediction: 9, n_hung_up_after_longer_than_predicted: 3 };
+
 function syntheticSplit() {
   const cat = (key: string, label: string, direction: string, per_frame: number) => ({ key, label, direction, total: 10, per_frame });
   return {
@@ -76,6 +96,16 @@ const SYNTHETIC_ACCURACY = {
     },
   ],
   waiting_time: null,
+  predictor_on_call_centre_logs: {
+    source: "synthetic", citation: "Made-up citation for a rendering check", caveat: "Synthetic caveat.",
+    protocol_version: 1, interval: "synthetic 95% interval", seed: 1, queue: "primary", split: "test",
+    n_days: 5, n_calls: 1234,
+    methods: syntheticCallCentreMethods(0), paired_mae_difference: {}, hang: SYNTHETIC_HANG,
+    post_hoc_s1: {
+      post_hoc: true, protocol_version: 2, definition: "synthetic", n_days: 5, n_calls: 1234,
+      methods: syntheticCallCentreMethods(-20), paired_mae_difference: {}, hang: SYNTHETIC_HANG,
+    },
+  },
   limits: ["Synthetic limit"],
 };
 

@@ -3,8 +3,10 @@
 import { useState } from "react";
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ApiError } from "@/lib/api";
-import type { AccuracyData, CountErrorCategory, MissingSource } from "@/lib/accuracy-types";
-import { formatNumber, formatSigned } from "@/lib/format";
+import type {
+  AccuracyData, CallCentreMethod, CallCentreMethodKey, CountErrorCategory, Interval, MissingSource,
+} from "@/lib/accuracy-types";
+import { formatCount, formatNumber, formatSigned } from "@/lib/format";
 import { EmptyState } from "@/components/EmptyState";
 import { MetricCard } from "@/components/MetricCard";
 import { NOT_GENERATED } from "@/components/AccuracySummaryCard";
@@ -186,6 +188,70 @@ function ChangesSection({ data }: Readonly<{ data: AccuracyData }>) {
   );
 }
 
+export const CALL_CENTRE_TITLE = "Waiting-time predictor on real call-centre queues";
+export const CALL_CENTRE_CAVEAT = "Phone queue, 1999, Israel; measures the prediction formula, not the cameras.";
+
+const CALL_CENTRE_ROWS: { key: CallCentreMethodKey; label: string }[] = [
+  { key: "predictor", label: "Prediction formula (queue length ÷ service rate)" },
+  { key: "les", label: "Baseline: wait of the last caller to enter service" },
+  { key: "recent_mean", label: "Baseline: mean wait of the last 20 callers" },
+  { key: "regression", label: "Baseline: queue-length regression" },
+];
+
+const withInterval = (i: Interval, digits: number, scale = 1) =>
+  `${formatNumber(i.value * scale, digits)} [${formatNumber(i.lo * scale, digits)}, ${formatNumber(i.hi * scale, digits)}]`;
+
+function CallCentreCard({ data }: Readonly<{ data: AccuracyData }>) {
+  const cc = data.predictor_on_call_centre_logs ?? null;
+  if (!cc) {
+    return <Section title={CALL_CENTRE_TITLE}><Unavailable text={unavailable(data.missing_sources, "predictor_on_call_centre_logs")} /></Section>;
+  }
+  const s1 = cc.post_hoc_s1.methods.predictor;
+  const beating = (["les", "recent_mean", "regression"] as const)
+    .filter((k) => cc.post_hoc_s1.methods[k].mae_s.value < s1.mae_s.value).length;
+  const cell = (m: CallCentreMethod) => ({
+    mae: withInterval(m.mae_s, 1), cov: withInterval(m.coverage, 0, 100), bias: formatSigned(m.bias_s.value, 1),
+  });
+  return (
+    <Section title={CALL_CENTRE_TITLE}>
+      <p className="text-sm text-text-2">{CALL_CENTRE_CAVEAT}</p>
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full text-left text-sm" data-testid="call-centre-table">
+          <caption className="sr-only">Test-month waiting-time error of the formula and three baselines</caption>
+          <thead>
+            <tr className="text-text-2">
+              <th className="py-1 pr-4 font-medium">Method</th>
+              <th className="py-1 pr-4 font-medium">Mean absolute error, s (95% interval)</th>
+              <th className="py-1 pr-4 font-medium">Calls with a prediction, % (95% interval)</th>
+              <th className="py-1 font-medium">Bias, s</th>
+            </tr>
+          </thead>
+          <tbody>
+            {CALL_CENTRE_ROWS.map(({ key, label }) => {
+              const c = cell(cc.methods[key]);
+              return (
+                <tr key={key} className="border-t border-border">
+                  <td className={`py-1 pr-4 ${key === "predictor" ? "font-medium text-text" : ""}`}>{label}</td>
+                  <td className="num py-1 pr-4">{c.mae}</td>
+                  <td className="num py-1 pr-4">{c.cov}</td>
+                  <td className="num py-1">{c.bias}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="num mt-3 text-xs text-text-3">
+        {`${formatCount(cc.n_calls)} answered calls over ${cc.n_days} held-out test days (Nov–Dec 1999) · protocol v${cc.protocol_version} · range coverage ${formatNumber((cc.methods.predictor.range_coverage?.value ?? NaN) * 100, 0)}% · ${cc.interval}`}
+      </p>
+      <p data-testid="call-centre-s1" className="mt-2 text-sm text-text-2">
+        {`Post hoc, not the headline: counting every service start (protocol v${cc.post_hoc_s1.protocol_version}) gives ${formatNumber(s1.mae_s.value, 1)} s mean error and ${formatNumber(s1.coverage.value * 100, 0)}% coverage, worse than ${beating} of the 3 baselines.`}
+      </p>
+      <p className="mt-2 text-xs text-text-3">{`Source: ${cc.source}. ${cc.citation}.`}</p>
+    </Section>
+  );
+}
+
 export function AccuracyView({ data, error }: Readonly<{ data: AccuracyData | undefined; error: Error | null }>) {
   if (error) {
     return <EmptyState title={error instanceof ApiError && error.status === 404 ? NOT_GENERATED : error.message} />;
@@ -210,6 +276,7 @@ export function AccuracyView({ data, error }: Readonly<{ data: AccuracyData | un
           caption={data.waiting_time ? `${new Set(data.waiting_time.per_clip.map((c) => c.clip)).size} recorded clips` : undefined}
         />
       </section>
+      <CallCentreCard data={data} />
       <Section title="Error by clip"><ClipSection data={data} /></Section>
       <Section title="Where the count goes wrong, per labelled frame"><CountSection data={data} /></Section>
       <ChangesSection data={data} />

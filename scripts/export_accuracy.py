@@ -28,6 +28,12 @@ QUEUE_960 = "outputs/s6_analysis/queue_960.json"
 ERRORS_640 = "outputs/s6_analysis/errors_640.json"
 CHOSEN_ALL = "outputs/s6_sweep/chosen_all.json"
 WAIT_GLOB = "outputs/metrics/*_wait_eval.json"
+CALL_CENTRE = "outputs/metrics/anonymous_bank_wait_eval.json"
+CALL_CENTRE_FILE = "anonymous_bank_wait_eval.json"  # not a camera clip: kept out of waiting_time
+CALL_CENTRE_CITATION = (
+    "\u2018Anonymous Bank\u2019 Call-Center Data, Ilan Guedj and Avi Mandelbaum, Technion SEE Center"
+)
+CALL_CENTRE_METHODS = ("predictor", "les", "recent_mean", "regression")
 BASELINE = "as_configured"
 SERIES_KEY = "smoothed_from5s"
 
@@ -211,6 +217,8 @@ def _waiting_time(outputs: Path, missing: list[dict]) -> dict | None:
     """
     per_clip, pooled = [], {}
     for path in sorted((outputs / "metrics").glob("*_wait_eval.json")):
+        if path.name == CALL_CENTRE_FILE:
+            continue
         stem = path.name.removesuffix("_wait_eval.json")
         observed = stem.endswith("_observed")
         clip = stem.removesuffix("_observed") if observed else stem
@@ -237,6 +245,45 @@ def _waiting_time(outputs: Path, missing: list[dict]) -> dict | None:
     return {"source": WAIT_GLOB, "per_clip": per_clip, "pooled": pooled or None}
 
 
+def _call_centre(outputs: Path) -> dict:
+    """Test-month headline of the Anonymous Bank replay, copied from its eval JSON.
+
+    The post-hoc S1 summary is flagged ``post_hoc`` and never replaces the headline.
+    """
+    data = _load(outputs / "metrics" / CALL_CENTRE_FILE)
+    try:
+        test = data["queues"]["primary"]["test"]
+        s1 = data["post_hoc_sensitivity"]["S1_all_service_starts"]
+        s1_test = s1["test"]
+        return {
+            "source": CALL_CENTRE,
+            "citation": CALL_CENTRE_CITATION,
+            "caveat": data["caveat"],
+            "protocol_version": data["protocol_version"],
+            "interval": data["interval"],
+            "seed": data["seed"],
+            "queue": "primary",
+            "split": "test",
+            "n_days": test["n_days"],
+            "n_calls": test["methods"]["predictor"]["n_agent"],
+            "methods": {name: test["methods"][name] for name in CALL_CENTRE_METHODS},
+            "paired_mae_difference": test["paired_mae_difference"],
+            "hang": test["hang"],
+            "post_hoc_s1": {
+                "post_hoc": s1["post_hoc"],
+                "protocol_version": s1["protocol_version"],
+                "definition": s1["definition"],
+                "n_days": s1_test["n_days"],
+                "n_calls": s1_test["methods"]["predictor"]["n_agent"],
+                "methods": {name: s1_test["methods"][name] for name in CALL_CENTRE_METHODS},
+                "paired_mae_difference": s1_test["paired_mae_difference"],
+                "hang": s1_test["hang"],
+            },
+        }
+    except (KeyError, TypeError, AttributeError) as error:
+        raise _Missing(f"unexpected layout: missing {error}") from None
+
+
 def build_accuracy(outputs_dir: Path, splits_dir: Path, now: datetime) -> dict:
     """Build the accuracy JSON from ``outputs_dir`` and ``splits_dir``; ``now`` stamps it."""
     missing: list[dict] = []
@@ -253,6 +300,7 @@ def build_accuracy(outputs_dir: Path, splits_dir: Path, now: datetime) -> dict:
     count_errors = section("count_errors", ERRORS_640, lambda: _count_errors(outputs_dir))
     changes = _changes(outputs_dir, missing)
     waiting = _waiting_time(outputs_dir, missing)
+    call_centre = section("predictor_on_call_centre_logs", CALL_CENTRE, lambda: _call_centre(outputs_dir))
     if waiting is None:
         missing.append(
             {"section": "waiting_time", "path": WAIT_GLOB, "reason": "not measured yet (session 3)"}
@@ -276,6 +324,7 @@ def build_accuracy(outputs_dir: Path, splits_dir: Path, now: datetime) -> dict:
         "count_errors": count_errors,
         "changes_not_adopted": changes,
         "waiting_time": waiting,
+        "predictor_on_call_centre_logs": call_centre,
         "limits": limits,
     }
 

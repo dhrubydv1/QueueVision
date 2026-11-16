@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api";
-import type { AccuracyData } from "@/lib/accuracy-types";
+import type { AccuracyData, CallCentreMethod, PredictorOnCallCentreLogs } from "@/lib/accuracy-types";
 import { AccuracyView } from "./AccuracyView";
 
 // Made-up fixture values for rendering only.
@@ -130,5 +130,43 @@ describe("AccuracyView", () => {
   it("shows the empty state on 404", () => {
     render(<AccuracyView data={undefined} error={new ApiError("nope", 404)} />);
     expect(screen.getByText("Accuracy data not generated — run scripts/export_accuracy.py")).toBeInTheDocument();
+  });
+
+  describe("call-centre predictor card", () => {
+    const iv = (value: number) => ({ value, lo: value - 1, hi: value + 1 });
+    const method = (mae: number, coverage: number, bias: number): CallCentreMethod =>
+      ({ n_agent: 100, n_covered: 90, coverage: { value: coverage, lo: coverage - 0.01, hi: Math.min(1, coverage + 0.01) }, mae_s: iv(mae), rmse_s: iv(1), median_abs_error_s: iv(1), bias_s: iv(bias), within_30s: iv(0.1), within_60s: iv(0.2), range_coverage: iv(0.25) });
+    const methods = (offset: number) => ({
+      predictor: method(100 + offset, 0.9, 40), les: method(80, 0.99, -10), recent_mean: method(70, 0.98, -5), regression: method(60, 1, 0),
+    });
+    const cc: PredictorOnCallCentreLogs = {
+      source: "outputs/metrics/anonymous_bank_wait_eval.json", citation: "Made-up citation", caveat: "c",
+      protocol_version: 1, interval: "95% test interval", seed: 1, queue: "primary", split: "test", n_days: 5, n_calls: 12345,
+      methods: methods(0), paired_mae_difference: {}, hang: { n_hang: 1, n_hang_with_prediction: 1, n_hung_up_after_longer_than_predicted: 0 },
+      post_hoc_s1: { post_hoc: true, protocol_version: 2, definition: "d", n_days: 5, n_calls: 777, methods: methods(-20), paired_mae_difference: {}, hang: { n_hang: 1, n_hang_with_prediction: 1, n_hung_up_after_longer_than_predicted: 0 } },
+    };
+    it("shows the formula next to the three baselines, with caveat and post-hoc note", () => {
+      render(<AccuracyView data={{ ...data, predictor_on_call_centre_logs: cc }} error={null} />);
+      expect(screen.getByRole("heading", { name: "Waiting-time predictor on real call-centre queues" })).toBeInTheDocument();
+      expect(screen.getByText("Phone queue, 1999, Israel; measures the prediction formula, not the cameras.")).toBeInTheDocument();
+      const rows = within(screen.getByTestId("call-centre-table")).getAllByRole("row").slice(1);
+      expect(rows).toHaveLength(4);
+      expect(rows[0]).toHaveTextContent("100.0 [99.0, 101.0]");
+      expect(rows[0]).toHaveTextContent("90 [89, 91]");
+      expect(rows[0]).toHaveTextContent("+40.0");
+      expect(rows[3]).toHaveTextContent("60.0 [59.0, 61.0]");
+      expect(screen.getByText(/12,345 answered calls over 5 held-out test days/)).toBeInTheDocument();
+      expect(screen.getByTestId("call-centre-s1")).toHaveTextContent(/Post hoc, not the headline.*80\.0 s.*worse than 2 of the 3 baselines/);
+      expect(screen.getByText(/Made-up citation/)).toBeInTheDocument();
+      // the camera card is unchanged
+      expect(screen.getByText("Not measured yet")).toBeInTheDocument();
+    });
+    it("says so when the section is absent, still under the same title", () => {
+      const d = { ...data, predictor_on_call_centre_logs: null, missing_sources: [{ section: "predictor_on_call_centre_logs", path: "outputs/metrics/anonymous_bank_wait_eval.json", reason: "file not found" }] };
+      render(<AccuracyView data={d} error={null} />);
+      expect(screen.getByRole("heading", { name: "Waiting-time predictor on real call-centre queues" })).toBeInTheDocument();
+      expect(screen.getByText("Not available — file not found (outputs/metrics/anonymous_bank_wait_eval.json)")).toBeInTheDocument();
+      expect(screen.queryByTestId("call-centre-table")).toBeNull();
+    });
   });
 });

@@ -116,11 +116,17 @@ def test_build_accuracy_reads_numbers_from_files(tmp_path: Path) -> None:
     assert out["generated_at"] == NOW.isoformat()
     assert out["missing_sources"] == [
         {
+            "section": "predictor_on_call_centre_logs",
+            "path": "outputs/metrics/anonymous_bank_wait_eval.json",
+            "reason": "file not found",
+        },
+        {
             "section": "waiting_time",
             "path": "outputs/metrics/*_wait_eval.json",
             "reason": "not measured yet (session 3)",
-        }
+        },
     ]
+    assert out["predictor_on_call_centre_logs"] is None
     q = out["queue_length"]
     assert q["source"] == "outputs/s6_analysis/queue_640.json"
     assert q["protocol"] == {
@@ -252,6 +258,7 @@ def test_no_typed_numbers(tmp_path: Path) -> None:
         "count_errors",
         "changes_not_adopted",
         "waiting_time",
+        "predictor_on_call_centre_logs",
     }
 
 
@@ -295,3 +302,114 @@ def test_wait_eval_glob_is_sorted(tmp_path: Path, monkeypatch) -> None:
     out = build_accuracy(outputs, splits, NOW)
     paths = [m["path"] for m in out["missing_sources"] if m["section"] == "waiting_time"]
     assert paths == sorted(paths) and len(paths) == 3
+
+
+def ci(value: float) -> dict:
+    return {"value": value, "lo": value - 1, "hi": value + 1}
+
+
+def method(mae: float, coverage: float, n_agent: int = 100) -> dict:
+    return {
+        "n_agent": n_agent,
+        "n_covered": int(n_agent * coverage),
+        "coverage": ci(coverage),
+        "mae_s": ci(mae),
+        "bias_s": ci(mae / 10),
+    }
+
+
+def call_centre_file(base: float) -> dict:
+    def methods(offset: float, n: int) -> dict:
+        return {
+            "predictor": method(base + offset, 0.8, n),
+            "les": method(base - 10, 0.99, n),
+            "recent_mean": method(base - 12, 0.98, n),
+            "regression": method(base - 20, 1.0, n),
+        }
+
+    paired = {"les": {"n_common": 5, "mae_diff_s": ci(3.0)}}
+    hang = {"n_hang": 7, "n_hang_with_prediction": 6, "n_hung_up_after_longer_than_predicted": 2}
+    return {
+        "protocol_version": 1,
+        "seed": 42,
+        "interval": "95% percentile, day-level cluster bootstrap",
+        "caveat": "Phone queue, 1999, Israel; measures the prediction formula, not the cameras.",
+        "queues": {
+            "primary": {
+                "test": {
+                    "n_days": 4,
+                    "methods": methods(0, 100),
+                    "paired_mae_difference": paired,
+                    "hang": hang,
+                },
+                "validation": {"n_days": 3, "methods": methods(5, 90)},
+            }
+        },
+        "post_hoc_sensitivity": {
+            "S1_all_service_starts": {
+                "protocol_version": 2,
+                "post_hoc": True,
+                "definition": "all service starts",
+                "test": {
+                    "n_days": 4,
+                    "methods": methods(-15, 100),
+                    "paired_mae_difference": paired,
+                    "hang": hang,
+                },
+            }
+        },
+    }
+
+
+def test_call_centre_section_from_synthetic_file(tmp_path: Path) -> None:
+    outputs, splits = make_sources(tmp_path)
+    write(outputs / "metrics" / "anonymous_bank_wait_eval.json", call_centre_file(90.0))
+    out = build_accuracy(outputs, splits, NOW)
+    cc = out["predictor_on_call_centre_logs"]
+    assert cc["source"] == "outputs/metrics/anonymous_bank_wait_eval.json"
+    assert cc["citation"] == (
+        "\u2018Anonymous Bank\u2019 Call-Center Data, Ilan Guedj and Avi Mandelbaum, Technion SEE Center"
+    )
+    assert cc["caveat"] == "Phone queue, 1999, Israel; measures the prediction formula, not the cameras."
+    assert (cc["protocol_version"], cc["split"], cc["queue"]) == (1, "test", "primary")
+    assert (cc["n_days"], cc["n_calls"]) == (4, 100)
+    assert list(cc["methods"]) == ["predictor", "les", "recent_mean", "regression"]
+    assert cc["methods"]["predictor"]["mae_s"] == {"value": 90.0, "lo": 89.0, "hi": 91.0}
+    assert cc["methods"]["regression"]["mae_s"]["value"] == 70.0
+    assert cc["methods"]["predictor"]["coverage"]["value"] == 0.8
+    assert cc["hang"]["n_hang"] == 7
+    s1 = cc["post_hoc_s1"]
+    assert s1["post_hoc"] is True and s1["protocol_version"] == 2
+    assert s1["methods"]["predictor"]["mae_s"]["value"] == 75.0
+    # the headline is the version-1 number, not S1
+    assert cc["methods"]["predictor"]["mae_s"]["value"] != s1["methods"]["predictor"]["mae_s"]["value"]
+    assert all(m["section"] != "predictor_on_call_centre_logs" for m in out["missing_sources"])
+
+
+def test_call_centre_file_is_not_a_camera_clip(tmp_path: Path) -> None:
+    outputs, splits = make_sources(tmp_path)
+    write(outputs / "metrics" / "anonymous_bank_wait_eval.json", call_centre_file(90.0))
+    out = build_accuracy(outputs, splits, NOW)
+    assert out["waiting_time"] is None
+    paths = [m["path"] for m in out["missing_sources"] if m["section"] == "waiting_time"]
+    assert not any("anonymous_bank" in path for path in paths)
+
+
+def test_call_centre_unexpected_layout_reported(tmp_path: Path) -> None:
+    outputs, splits = make_sources(tmp_path)
+    write(outputs / "metrics" / "anonymous_bank_wait_eval.json", {"protocol_version": 1})
+    out = build_accuracy(outputs, splits, NOW)
+    assert out["predictor_on_call_centre_logs"] is None
+    entry = next(m for m in out["missing_sources"] if m["section"] == "predictor_on_call_centre_logs")
+    assert entry["reason"].startswith("unexpected layout")
+
+
+def test_call_centre_section_served_by_route(tmp_path: Path) -> None:
+    outputs, splits = make_sources(tmp_path)
+    write(outputs / "metrics" / "anonymous_bank_wait_eval.json", call_centre_file(90.0))
+    payload = build_accuracy(outputs, splits, NOW)
+    settings = ApiSettings(data_dir=tmp_path / "data", camera_dir=tmp_path / "cameras")
+    with TestClient(create_app(settings)) as client:
+        settings.accuracy_path.write_text(json.dumps(payload))
+        body = client.get("/api/accuracy").json()
+    assert body["predictor_on_call_centre_logs"]["methods"]["predictor"]["mae_s"]["value"] == 90.0

@@ -1,6 +1,6 @@
 # Dataset licences and terms of use
 
-Checked 2026-11-09 against official sources. Nothing was downloaded. Register: `datasets/metadata/dataset_licensing_register.csv`.
+Checked 2026-11-09 against official sources (Anonymous Bank added 2026-11-13). Register: `datasets/metadata/dataset_licensing_register.csv`.
 Rule used: EXPLICIT = a stated licence/terms was read; ABSENT = none found. Silence is never treated as permission.
 
 ## MOT17 (MOTChallenge) - EXPLICIT
@@ -39,6 +39,17 @@ Rule used: EXPLICIT = a stated licence/terms was read; ABSENT = none found. Sile
 - Recorded: `none stated`, terms_verified=no.
 - May / May not: as for MIT Traffic.
 - Ask the authors (CUHK MMLab): same questions as MIT Traffic.
+
+## Anonymous Bank call-centre data - EXPLICIT (informal)
+
+- Source: https://see-center.iem.technion.ac.il/databases/AnonymousBank/ (Data/AnonymousBank.rar and Data/AnonymousBank.pdf, checked 2026-11-13). Mirror: University of Bern, math-stat.unibe.ch (documentation PDF plus 12 monthly zips).
+- Authors: Ilan Guedj and Avi Mandelbaum (Technion); documentation dated 9 Feb 2000. Israeli bank call centre, calendar year 1999.
+- Quote (documentation PDF, read 2026-11-13): "The data is free for use. If used, please notify Avi Mandelbaum, at avim@ie.technion.ac.il and do acknowledge the data source in any of your work."
+- Redistribution: not stated - do not redistribute. Commercial use: not stated. Attribution: yes (acknowledge the source); notify Prof. Mandelbaum.
+- Recorded: license_name "free for use, notify and acknowledge (informal statement)", terms_verified=yes.
+- Citation: Guedj, I. and Mandelbaum, A., "Anonymous Bank" Call-Center Data, documentation 9 Feb 2000, Technion SEE Center, https://see-center.iem.technion.ac.il/databases/AnonymousBank/.
+- May: local academic use for scoring the waiting-time predictor, with acknowledgement. May not: commit or publish raw or converted data (the repo is public); `datasets/raw/anonymous_bank/` is git-ignored. Only file URLs, sizes and SHA-256 hashes are committed (`datasets/metadata/anonymous_bank_files.csv`).
+- Team action: email Prof. Mandelbaum (avim@ie.technion.ac.il) to say the data is used and how it is acknowledged. This is not done by the tooling.
 
 ## Project policy until terms are clarified
 
