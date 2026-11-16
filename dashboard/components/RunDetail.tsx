@@ -8,7 +8,7 @@ import {
   ApiError, deleteRun, getAlerts, getEvents, getRun, getTimeseries, getWaits, reportUrl, timeseriesCsvUrl, videoUrl,
   type Alert, type Run,
 } from "@/lib/api";
-import { formatSeconds } from "@/lib/format";
+import { formatClock, formatSeconds } from "@/lib/format";
 import { EmptyState } from "./EmptyState";
 import { EventFeed } from "./EventFeed";
 import { MetricCard } from "./MetricCard";
@@ -91,7 +91,10 @@ function AlertsTable({ alerts }: Readonly<{ alerts: Alert[] }>) {
               <td className="num py-2 pr-4">{formatSeconds(a.timestamp_s)}</td>
               <td className="py-2 pr-4">{alertLabel(a.event_type)}</td>
               <td className="num py-2 pr-4">{a.queue_length}</td>
-              <td className="py-2 text-text-2">{a.reasons}</td>
+              <td className="py-2 text-text-2">
+                {a.reasons}
+                {a.acknowledged_at ? <span className="num block text-xs">{`Acknowledged ${formatClock(a.acknowledged_at, "Asia/Kathmandu")}`}</span> : null}
+              </td>
             </tr>
           ))}
         </tbody>

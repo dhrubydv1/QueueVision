@@ -86,6 +86,8 @@ export const getTimeseries = (id: number) => apiGet<TimeseriesRow[]>(`/api/video
 export const getEvents = (id: number) => apiGet<QueueEvent[]>(`/api/videos/${id}/events?limit=10000`);
 export const getWaits = (id: number) => apiGet<Wait[]>(`/api/videos/${id}/waits`);
 export const getAlerts = (id: number) => apiGet<Alert[]>(`/api/videos/${id}/alerts`);
+export const ackAlert = (videoId: number, alertId: number) =>
+  send<Alert>(`/api/videos/${videoId}/alerts/${alertId}/ack`, { method: "POST" });
 export const getCameras = () => apiGet<CameraInfo[]>("/api/cameras");
 export const getAccuracy = () => apiGet<AccuracyData>("/api/accuracy");
 

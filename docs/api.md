@@ -116,6 +116,7 @@ The report's `queue.service_rate` section gains `estimator` (`"queue_length_over
 `note` without a service zone). Existing fields are unchanged.
 | `GET /api/videos/{id}/waits` | Wait rows |
 | `GET /api/videos/{id}/alerts` | Alert rows |
+| `POST /api/videos/{id}/alerts/{alert_id}/ack` | Acknowledge an alert; returns the updated alert row. The first call sets `acknowledged_at`, repeat calls change nothing; `404` for an unknown video, an unknown alert, or an alert of another video |
 | `GET /api/videos/{id}/timeseries` | Per-second rows (same columns as the CLI's `<name>_queue.csv`) |
 | `GET /api/videos/{id}/timeseries.csv` | The time series as the CLI's `<name>_queue.csv` file download (Sprint 7); `404` when not available |
 | `GET /api/videos/{id}/preview.jpg` | Latest head-blurred JPEG of a processing run (Sprint 7); `404` otherwise |
@@ -250,6 +251,15 @@ shape of a wait row (not a captured database dump):
 The `alerts` rows have `video_id`, `alert_id`, `event_type`, `timestamp_s`,
 `frame_index`, `condition_since_s`, `reasons`, `queue_length` and
 `predicted_wait_s`; `event_type` is `congestion_start` or `congestion_end`. This run raised no congestion alert, so its list is empty.
+Alert rows also carry `acknowledged_at` (UTC ISO 8601, seconds, or `null`) and
+`acknowledged_by` (always `null` for now; there is no user identity yet). From a
+test-client run, `POST /api/videos/1/alerts/1/ack` returned `200` with:
+
+```json
+{"video_id": 1, "alert_id": 1, "event_type": "congestion_start", "timestamp_s": 4.0, "frame_index": 40, "condition_since_s": 3.0, "reasons": "queue_length", "queue_length": 5.0, "predicted_wait_s": null, "acknowledged_at": "2026-11-13T13:17:27+00:00", "acknowledged_by": null}
+```
+
+and an unknown alert returned `404` `{"detail": "alert 999 not found for video 1"}`.
 The `timeseries` rows have `time_s`, `frame`, `people_in_frame`,
 `raw_queue_count`, `queue_length`, `service_rate_per_min`, `service_rate_status`,
 `predicted_wait_s`, `predicted_wait_low_s`, `predicted_wait_high_s` and
@@ -470,11 +480,11 @@ still written to `data/outputs/<video_id>/` exactly as the CLI writes them.
 
 | Table | Content |
 |---|---|
-| `schema_meta` | `key`/`value`; holds `schema_version` (1) |
+| `schema_meta` | `key`/`value`; holds `schema_version` (2, see the migration list in [architecture.md](architecture.md)) |
 | `videos` | One row per run: `video_id`, `original_name`, `camera_id`, `status`, `error`, `options` (JSON), `fps`, `frames_total`, `frames_processed`, `created_at`, `started_at`, `finished_at`, `report` (JSON), `output_dir` |
 | `events` | `event_id`, `video_id`, `schema_version`, `event_type`, `timestamp_s`, `detected_s`, `frame_index`, `person_key`, `payload` (the full event JSON) |
 | `waits` | `video_id`, `person_key`, `track_ids`, `join_s`, `service_s`, `wait_s`, `abandoned`, `left_s` |
-| `alerts` | `alert_id`, `video_id`, `event_type`, `timestamp_s`, `frame_index`, `condition_since_s`, `reasons`, `queue_length`, `predicted_wait_s` |
+| `alerts` | `alert_id`, `video_id`, `event_type`, `timestamp_s`, `frame_index`, `condition_since_s`, `reasons`, `queue_length`, `predicted_wait_s`, `acknowledged_at`, `acknowledged_by` |
 | `timeseries` | `video_id` plus the CSV columns listed above |
 
 `events`, `waits`, `alerts` and `timeseries` rows are deleted with their video

@@ -1,8 +1,9 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { type APIRequestContext, type Page, expect, test } from "@playwright/test";
 import { ApiServer, BASE_URL, CLIP, missingInputs } from "./server";
 
+const CLIP27 = path.join(path.dirname(CLIP), "cad_seq27.mp4");
 const SKIP_REASON = missingInputs();
 test.skip(SKIP_REASON !== null, `real-model end-to-end tests need local inputs: ${SKIP_REASON}`);
 
@@ -22,11 +23,12 @@ type Run = { video_id: number; status: string };
 /** Upload the CAD clip through the API (the UI has no max_frames field). */
 async function uploadClip(
   request: APIRequestContext,
-  options: { maxFrames: number | null; realtime: boolean },
+  options: { maxFrames: number | null; realtime: boolean; clip?: string; camera?: string },
 ): Promise<Run> {
+  const clip = options.clip ?? CLIP;
   const multipart: Record<string, string | number | boolean | { name: string; mimeType: string; buffer: Buffer }> = {
-    file: { name: path.basename(CLIP), mimeType: "video/mp4", buffer: readFileSync(CLIP) },
-    camera_id: "cad_seq25",
+    file: { name: path.basename(clip), mimeType: "video/mp4", buffer: readFileSync(clip) },
+    camera_id: options.camera ?? "cad_seq25",
     realtime: options.realtime,
   };
   if (options.maxFrames !== null) multipart.max_frames = options.maxFrames;
@@ -175,4 +177,37 @@ test("Overview hydrates without console errors and shows no build-time date or c
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
   await expect(page.getByText(/\d+ runs? processing/)).toBeVisible();
   expect(problems.filter((p) => /hydrat|did not match|server rendered/i.test(p))).toEqual([]);
+});
+
+// cad_seq27 crosses the alert limit (8) around 7 s and holds it past min_duration_seconds (10 s), so a real
+// congestion_start row appears at about 17 s of video; real-time pacing keeps the run live until then.
+test("Acknowledge saves the alert, survives a reload, and shows in the recorded run", async ({ page, request }) => {
+  test.skip(!existsSync(CLIP27), "datasets/raw/cad_seq27.mp4 is not present");
+  test.setTimeout(300_000);
+  const run = await uploadClip(request, { maxFrames: 1200, realtime: true, clip: CLIP27, camera: "cad_seq27" });
+  await page.goto(`/live?id=${run.video_id}`);
+
+  const banner = page.getByRole("alert").filter({ hasText: "Congestion alert" });
+  await expect(banner).toBeVisible({ timeout: 90_000 });
+  const ack = banner.getByRole("button", { name: "Acknowledge" });
+  await expect(ack).toBeEnabled({ timeout: 10_000 });
+  await ack.click();
+  await expect(banner).toBeHidden();
+
+  const alerts = async () =>
+    (await (await request.get(`${BASE_URL}/api/videos/${run.video_id}/alerts`)).json()) as {
+      event_type: string; acknowledged_at: string | null;
+    }[];
+  const starts = (await alerts()).filter((a) => a.event_type === "congestion_start");
+  expect(starts.at(-1)?.acknowledged_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|\+00:00)$/);
+
+  await page.reload();
+  await expect(page.getByLabel("Queue length", { exact: true }).locator("p").first()).toHaveText(/^\d+$/, { timeout: 15_000 });
+  await page.waitForTimeout(5_000); // longer than the 2 s alert poll
+  await expect(banner).toBeHidden();
+
+  await waitForStatus(request, run.video_id, "completed", 150_000);
+  await page.goto(`/run?id=${run.video_id}`);
+  await page.getByRole("tab", { name: /^Alerts/ }).click();
+  await expect(page.getByText(/^Acknowledged \d{2}:\d{2}:\d{2} NPT$/)).toBeVisible();
 });

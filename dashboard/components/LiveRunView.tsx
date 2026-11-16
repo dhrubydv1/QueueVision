@@ -1,9 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ApiError, cancelRun, getCameras, getEvents, getTimeseries } from "@/lib/api";
+import { ApiError, ackAlert, type Alert, cancelRun, getAlerts, getCameras, getEvents, getTimeseries } from "@/lib/api";
 import { formatClock, formatNumber } from "@/lib/format";
 import { FINAL_STATUSES, eventKey } from "@/lib/live-types";
 import { useLiveSocket } from "@/lib/useLiveSocket";
@@ -19,6 +19,16 @@ import { StatusChip, type Status } from "./StatusChip";
 import { WaitCard } from "./WaitCard";
 
 const MAX_LIVE_POINTS = 5000;
+
+function openAlert(rows: Alert[] | undefined): Alert | null {
+  if (!rows) return null;
+  let start: Alert | null = null;
+  for (const r of [...rows].sort((a, b) => a.alert_id - b.alert_id)) {
+    if (r.event_type === "congestion_start") start = r;
+    else if (r.event_type === "congestion_end") start = null;
+  }
+  return start;
+}
 
 export function LiveRunView({ videoId }: Readonly<{ videoId: number }>) {
   const { run, progress, events, status, connectionState, lastMessageAt } = useLiveSocket(videoId);
@@ -78,7 +88,7 @@ export function LiveRunView({ videoId }: Readonly<{ videoId: number }>) {
     return [...base, ...live.filter((p) => p.t > last)];
   }, [history.data, live]);
 
-  // One AlertBanner per alert episode (its dismissal lasts for the component's lifetime).
+  // One AlertBanner per alert episode (resets its error and busy state).
   const alertActive = progress?.alert_active === true;
   const [episode, setEpisode] = useState(0);
   const [wasAlert, setWasAlert] = useState(false);
@@ -86,6 +96,26 @@ export function LiveRunView({ videoId }: Readonly<{ videoId: number }>) {
     setWasAlert(alertActive);
     if (alertActive) setEpisode((n) => n + 1);
   }
+
+  // The open alert is the latest congestion_start with no congestion_end after it. Rows are written about a
+  // second after alert_active turns on, so poll until it exists. An acknowledged one hides the banner (also after reload).
+  const queryClient = useQueryClient();
+  const alertsKey = ["live-alerts", videoId];
+  const alertRows = useQuery({
+    queryKey: alertsKey,
+    queryFn: () => getAlerts(videoId),
+    enabled: alertActive,
+    refetchOnWindowFocus: false,
+    refetchInterval: (q) => (openAlert(q.state.data) ? false : 2000),
+  });
+  const openRow = openAlert(alertRows.data);
+  const acknowledged = openRow?.acknowledged_at != null;
+  const acknowledgeOpen = openRow
+    ? async () => {
+        const updated = await ackAlert(videoId, openRow.alert_id);
+        queryClient.setQueryData<Alert[]>(alertsKey, (rows) => (rows ?? []).map((r) => (r.alert_id === updated.alert_id ? updated : r)));
+      }
+    : null;
 
   // false on the server and during hydration, true afterwards (clock text depends on the browser's zone).
   const mounted = useSyncExternalStore(() => () => {}, () => true, () => false);
@@ -162,7 +192,7 @@ export function LiveRunView({ videoId }: Readonly<{ videoId: number }>) {
         </div>
       </div>
 
-      {alertActive ? <AlertBanner key={episode} reasons={progress?.alert_reasons ?? []} /> : null}
+      {alertActive && !acknowledged ? <AlertBanner key={episode} reasons={progress?.alert_reasons ?? []} onAcknowledge={acknowledgeOpen} /> : null}
       {offline ? (
         <p role="status" className="rounded-control border border-warn-border bg-warn-soft px-3 py-2 text-sm text-warn-text">
           Connection lost. Reconnecting; values below are not current.

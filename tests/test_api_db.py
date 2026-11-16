@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import re
+import sqlite3
+import threading
+
 import pytest
 
 from ai_engine.queue.event_schema import (
@@ -39,7 +43,7 @@ def _count(conn, table):
 def test_init_twice_and_schema_version(conn):
     db.init_db(conn)
     rows = conn.execute("SELECT key, value FROM schema_meta").fetchall()
-    assert [(r["key"], r["value"]) for r in rows] == [("schema_version", "1")]
+    assert [(r["key"], r["value"]) for r in rows] == [("schema_version", "2")]
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 
@@ -133,3 +137,219 @@ def test_service_complete_and_queue_exit_are_events_only_no_wait_rows(conn):
     assert db.list_events(conn, vid, event_type="queue_exit") == [events[2]]
     assert len(db.list_waits(conn, vid)) == 1  # only the service_start
     assert _count(conn, "alerts") == 0
+
+
+# --- migrations -----------------------------------------------------------------------------------
+
+# The version 1 schema exactly as shipped at b5bb0f9 (the timeseries columns are fixed by the old
+# TIMESERIES_COLUMNS list, so it is copied here instead of imported).
+_V1_DDL = """
+CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE videos (
+    video_id INTEGER PRIMARY KEY AUTOINCREMENT, original_name TEXT NOT NULL, camera_id TEXT NOT NULL,
+    status TEXT NOT NULL, error TEXT, options TEXT NOT NULL, fps REAL, frames_total INTEGER,
+    frames_processed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, started_at TEXT,
+    finished_at TEXT, report TEXT, output_dir TEXT
+);
+CREATE TABLE events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id INTEGER NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+    schema_version TEXT NOT NULL, event_type TEXT NOT NULL, timestamp_s REAL NOT NULL,
+    detected_s REAL NOT NULL, frame_index INTEGER NOT NULL, person_key TEXT, payload TEXT NOT NULL
+);
+CREATE TABLE waits (
+    video_id INTEGER NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+    person_key TEXT NOT NULL, track_ids TEXT NOT NULL, join_s REAL NOT NULL, service_s REAL,
+    wait_s REAL, abandoned INTEGER NOT NULL, left_s REAL, PRIMARY KEY (video_id, person_key)
+);
+CREATE TABLE alerts (
+    alert_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id INTEGER NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL, timestamp_s REAL NOT NULL, frame_index INTEGER NOT NULL,
+    condition_since_s REAL NOT NULL, reasons TEXT NOT NULL, queue_length REAL NOT NULL,
+    predicted_wait_s REAL
+);
+CREATE TABLE timeseries (
+    video_id INTEGER NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+    time_s REAL, frame INTEGER
+);
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '1');
+INSERT INTO videos (original_name, camera_id, status, options, created_at)
+    VALUES ('old.mp4', 'cam1', 'completed', '{}', '2026-01-01T00:00:00+00:00');
+INSERT INTO alerts (video_id, event_type, timestamp_s, frame_index, condition_since_s, reasons,
+    queue_length, predicted_wait_s)
+    VALUES (1, 'congestion_start', 40.0, 400, 35.0, 'queue_length', 6.0, 120.0);
+"""
+
+
+def _v1_db(tmp_path):
+    path = tmp_path / "queuevision.db"
+    raw = db.connect(path)
+    raw.executescript(_V1_DDL)
+    raw.commit()
+    raw.close()
+    return path
+
+
+def _backups(path):
+    return sorted(path.parent.glob(f"{path.name}.bak-*"))
+
+
+def _version(conn):
+    return conn.execute("SELECT value FROM schema_meta WHERE key = 'schema_version'").fetchone()[0]
+
+
+def _columns(conn, table="alerts"):
+    return [r["name"] for r in conn.execute(f"PRAGMA table_info({table})")]
+
+
+def test_fresh_database_is_latest_without_backup(tmp_path):
+    path = tmp_path / "queuevision.db"
+    conn = db.connect(path)
+    db.init_db(conn)
+    assert _version(conn) == str(db.MIGRATIONS[-1][0]) == "2"
+    assert {"acknowledged_at", "acknowledged_by"} <= set(_columns(conn))
+    assert _backups(path) == []
+    conn.close()
+
+
+def test_migrates_v1_database_keeping_rows_and_backing_up(tmp_path):
+    path = _v1_db(tmp_path)
+    conn = db.connect(path)
+    db.init_db(conn)
+    assert _version(conn) == "2"
+    assert {"acknowledged_at", "acknowledged_by"} <= set(_columns(conn))
+    alert = db.list_alerts(conn, 1)[0]
+    assert (alert["event_type"], alert["queue_length"], alert["predicted_wait_s"]) == (
+        "congestion_start",
+        6.0,
+        120.0,
+    )
+    assert alert["acknowledged_at"] is None and alert["acknowledged_by"] is None
+    assert db.get_video(conn, 1)["original_name"] == "old.mp4"
+    (backup,) = _backups(path)
+    assert re.fullmatch(r"queuevision\.db\.bak-v1-\d{8}T\d{6}Z", backup.name)
+    old = sqlite3.connect(backup)
+    assert "acknowledged_at" not in [r[1] for r in old.execute("PRAGMA table_info(alerts)")]
+    assert old.execute("SELECT value FROM schema_meta").fetchone()[0] == "1"
+    assert old.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 1
+    old.close()
+    conn.close()
+
+
+def test_second_init_is_a_noop(tmp_path):
+    path = _v1_db(tmp_path)
+    conn = db.connect(path)
+    db.init_db(conn)
+    before = _backups(path)
+    db.init_db(conn)
+    conn.close()
+    conn = db.connect(path)
+    db.init_db(conn)
+    assert _backups(path) == before and len(before) == 1
+    assert _version(conn) == "2"
+    conn.close()
+
+
+def test_failing_migration_rolls_back_and_keeps_backup(tmp_path, monkeypatch):
+    def boom(conn):
+        conn.execute("ALTER TABLE alerts ADD COLUMN half_done TEXT")
+        raise RuntimeError("migration failed")
+
+    path = _v1_db(tmp_path)
+    monkeypatch.setattr(db, "MIGRATIONS", [(2, boom)])
+    conn = db.connect(path)
+    with pytest.raises(RuntimeError, match="migration failed"):
+        db.init_db(conn)
+    assert _version(conn) == "1"
+    assert "half_done" not in _columns(conn)
+    assert len(_backups(path)) == 1
+    assert not conn.in_transaction
+    conn.close()
+
+
+def test_later_migration_failure_keeps_earlier_ones(tmp_path, monkeypatch):
+    def add_three(conn):
+        conn.execute("ALTER TABLE alerts ADD COLUMN three TEXT")
+
+    def fail(conn):
+        raise RuntimeError("nope")
+
+    path = _v1_db(tmp_path)
+    monkeypatch.setattr(db, "MIGRATIONS", [(2, db._migrate_1_to_2), (3, add_three), (4, fail)])
+    conn = db.connect(path)
+    with pytest.raises(RuntimeError):
+        db.init_db(conn)
+    assert _version(conn) == "3" and "three" in _columns(conn)
+    assert len(_backups(path)) == 1
+    conn.close()
+
+
+def test_acknowledge_alert_is_idempotent(conn):
+    vid = db.create_video(conn, "a.mp4", "cam1", {})
+    db.add_events(conn, vid, _events())
+    alert_id = db.list_alerts(conn, vid)[0]["alert_id"]
+    first = db.acknowledge_alert(conn, vid, alert_id)
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00", first["acknowledged_at"])
+    assert first["acknowledged_by"] is None
+    assert db.acknowledge_alert(conn, vid, alert_id) == first
+    assert db.acknowledge_alert(conn, vid + 1, alert_id) is None
+    assert db.acknowledge_alert(conn, vid, alert_id + 99) is None
+
+
+def test_second_connection_migrating_after_stale_version_read(tmp_path, monkeypatch):
+    """A reads version 1, then B migrates fully; A must skip (no duplicate column, no second backup)."""
+    path = _v1_db(tmp_path)
+    a, b = db.connect(path), db.connect(path)
+    real, state = db._read_version, {"first": True}
+
+    def stale_read(connection):
+        version = real(connection)
+        if connection is a and state["first"]:
+            state["first"] = False
+            db.init_db(b)
+        return version
+
+    monkeypatch.setattr(db, "_read_version", stale_read)
+    db.init_db(a)
+    assert _version(a) == "2" and _columns(a).count("acknowledged_at") == 1
+    assert len(_backups(path)) == 1
+    a.close()
+    b.close()
+
+
+def test_concurrent_init_db_threads_migrate_once(tmp_path):
+    path = _v1_db(tmp_path)
+    barrier, errors = threading.Barrier(2), []
+
+    def run():
+        connection = db.connect(path)
+        try:
+            barrier.wait()
+            db.init_db(connection)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            connection.close()
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    check = db.connect(path)
+    assert _version(check) == "2" and len(_backups(path)) == 1
+    check.close()
+
+
+def test_database_newer_than_code_is_rejected(tmp_path):
+    path = tmp_path / "future.db"
+    conn = db.connect(path)
+    db.init_db(conn)
+    newer = db.MIGRATIONS[-1][0] + 1
+    conn.execute("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'", (str(newer),))
+    conn.commit()
+    with pytest.raises(RuntimeError, match=rf"schema version {newer} is newer than this code supports"):
+        db.init_db(conn)
+    conn.close()

@@ -52,6 +52,18 @@ describe("RunDetail", () => {
     expect(screen.getByText("every 2nd frame · heads blurred · fast")).toBeInTheDocument();
   });
 
+  it("shows when an alert was acknowledged, in NPT", async () => {
+    vi.mocked(api.getRun).mockResolvedValue(run() as never);
+    vi.mocked(api.getAlerts).mockResolvedValue([
+      { alert_id: 1, video_id: 4, timestamp_s: 2, event_type: "congestion_start", queue_length: 9, reasons: "long", acknowledged_at: "2026-11-13T04:15:30Z", acknowledged_by: null },
+      { alert_id: 2, video_id: 4, timestamp_s: 9, event_type: "congestion_start", queue_length: 9, reasons: "again", acknowledged_at: null, acknowledged_by: null },
+    ] as never);
+    view();
+    await userEvent.click(await screen.findByRole("tab", { name: "Alerts (2)" }));
+    expect(await screen.findByText("Acknowledged 10:00:30 NPT")).toBeInTheDocument();
+    expect(screen.getAllByText(/Acknowledged/)).toHaveLength(1);
+  });
+
   it("shows the annotated video when heads were blurred", async () => {
     vi.mocked(api.getRun).mockResolvedValue(run() as never);
     const { container } = view();

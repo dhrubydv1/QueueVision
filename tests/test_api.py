@@ -389,3 +389,73 @@ def test_report_paths_outside_data_dir_are_not_served(settings, clip, tmp_path, 
             assert csv.status_code == 404 and csv.json()["detail"] == "time series not available"
             assert "SECRET" not in video.text + csv.text
         assert "outside the data directory" in caplog.text
+
+
+def _seed_alert(settings, camera: str = "walker") -> tuple[int, int]:
+    """A video row with one congestion alert, inserted directly (no run needed)."""
+    conn = db.connect(settings.db_path)
+    try:
+        video_id = db.create_video(conn, "a.mp4", camera, {})
+        db.add_events(
+            conn,
+            video_id,
+            [
+                {
+                    "schema_version": "1.0",
+                    "event_type": "congestion_start",
+                    "timestamp_s": 4.0,
+                    "detected_s": 4.5,
+                    "frame_index": 40,
+                    "condition_since_s": 3.0,
+                    "reasons": ["queue_length"],
+                    "queue_length": 5.0,
+                    "predicted_wait_s": None,
+                }
+            ],
+        )
+        return video_id, db.list_alerts(conn, video_id)[0]["alert_id"]
+    finally:
+        conn.close()
+
+
+def test_alert_ack_sets_once_and_is_idempotent(settings) -> None:
+    with make_client(settings) as client:
+        video_id, alert_id = _seed_alert(settings)
+        listed = client.get(f"/api/videos/{video_id}/alerts").json()[0]
+        assert listed["acknowledged_at"] is None and listed["acknowledged_by"] is None
+        first = client.post(f"/api/videos/{video_id}/alerts/{alert_id}/ack")
+        assert first.status_code == 200
+        body = first.json()
+        assert body["alert_id"] == alert_id and body["acknowledged_at"] and body["acknowledged_by"] is None
+        again = client.post(f"/api/videos/{video_id}/alerts/{alert_id}/ack")
+        assert again.status_code == 200 and again.json() == body
+        assert client.get(f"/api/videos/{video_id}/alerts").json() == [body]
+
+
+def test_alert_ack_404s(settings) -> None:
+    with make_client(settings) as client:
+        video_id, alert_id = _seed_alert(settings)
+        other_video, _ = _seed_alert(settings)
+        assert client.post(f"/api/videos/99/alerts/{alert_id}/ack").status_code == 404
+        assert client.post(f"/api/videos/{video_id}/alerts/{alert_id + 99}/ack").status_code == 404
+        assert client.post(f"/api/videos/{other_video}/alerts/{alert_id}/ack").status_code == 404
+        assert client.get(f"/api/videos/{video_id}/alerts").json()[0]["acknowledged_at"] is None
+
+
+def _flat_routes(routes):
+    """Routes in matching order; this FastAPI wraps include_router in lazy _IncludedRouter objects."""
+    for route in routes:
+        if hasattr(route, "original_router"):
+            yield from _flat_routes(route.original_router.routes)
+        else:
+            yield route
+
+
+def test_route_registration_order(settings) -> None:
+    flat = [(getattr(r, "path", None), r) for r in _flat_routes(create_app(settings).router.routes)]
+    paths = [p for p, _ in flat]
+    assert paths[-1] == "/{path:path}"  # the dashboard catch-all must be matched last
+    mount = paths.index("/legacy")  # the Mount comes first, the redirect routes after it
+    assert type(flat[mount][1]).__name__ == "Mount"
+    redirects = [i for i, (p, r) in enumerate(flat) if p == "/legacy" and i != mount]
+    assert redirects and min(redirects) > mount
