@@ -212,6 +212,23 @@ clips used for the Sprint 4 demo, the two MOT17 preview videos,
 the MOT17 ground-truth labels used for tracking evaluation, and a guide for
 recording and labelling real queue footage. Videos and annotations stay out of Git.
 
+### Call-centre logs: predictor accuracy on real call-centre queues
+
+The waiting-time **formula** (queue length divided by service rate) is scored against real
+waits in the "Anonymous Bank" phone-queue logs (1999, Israel). This measures the formula, not
+the cameras. On the held-out test months the formula is less accurate than three simple
+baselines; see [docs/testing_report.md](docs/testing_report.md) and the pre-registered
+[protocol](docs/anonymous_bank_protocol.md). The data stays out of Git.
+
+```bash
+python scripts/fetch_anonymous_bank.py                 # download + hash-check into datasets/raw/anonymous_bank/
+python -I scripts/validate_anonymous_bank.py           # parse, count exclusions -> outputs/metrics/anonymous_bank_validation.json
+python -I scripts/score_anonymous_bank.py              # replay and score -> outputs/metrics/anonymous_bank_wait_eval.json + figures
+python scripts/export_accuracy.py                      # adds section predictor_on_call_centre_logs for the dashboard
+```
+
+Call-centre data: 'Anonymous Bank' Call-Center Data, Ilan Guedj and Avi Mandelbaum, Technion SEE Center.
+
 ## 9. Running
 
 ```bash

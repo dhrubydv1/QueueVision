@@ -1,9 +1,170 @@
 # Testing Report
 
-The Sprint 8 browser checklist (pending, for a person) and pacing investigation come first, then Sprint 7 (session 2) results, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
+The Anonymous Bank call-centre results (predictor accuracy on real call-centre queues) come first, then the Sprint 8 browser checklist (pending, for a person) and pacing investigation, then Sprint 7 (session 2) results, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
 kept at the end. Every number here comes from a command that was actually run
 on the machine described under Sprint 2 (same environment). Nothing was
 estimated.
+
+## Predictor accuracy on real call-centre queues (Anonymous Bank, 1999; protocol v1 + post-hoc v2 addendum)
+
+**Result in one sentence: on the held-out test months the QueueVision prediction formula (queue length divided by service rate) is less accurate than all three simple baselines.** Mean absolute error (MAE) 96.8 s [91.4, 102.8] against 77.2 s for "last to enter service" (LES), 73.2 s for the recent mean and 61.2 s for a queue-length regression. It is biased high (+39.6 s), gives a prediction for only 87 % of calls, and its low-high range contains the actual wait for 22 % of calls. This is a measurement of the **formula on a phone queue**, reported as "predictor accuracy on real call-centre queues". It is not a measurement of QueueVision's waiting-time accuracy, and not of the cameras.
+
+All numbers below come from `outputs/metrics/anonymous_bank_wait_eval.json` and `outputs/metrics/anonymous_bank_validation.json` (both local and gitignored; reproduce with the commands in the README), or from the commands named in the text.
+
+### Method
+
+- Data: "Anonymous Bank" Call-Center Data, Ilan Guedj and Avi Mandelbaum, Technion SEE Center (all calls of 1999, 12 monthly files, 444,448 rows). Input hashes are recorded in the eval JSON (`AnonymousBank.rar` SHA-256 `110527823a296e3163566f5d10d687e13859c60d963fd403d4623d89c7cadc4b`).
+- Protocol: [docs/anonymous_bank_protocol.md](anonymous_bank_protocol.md). **Version 1 was committed in `f940045` before any prediction was scored**; the **version 2 addendum was committed in `aa112de` after the v1 results on validation and test were seen** and adds one post-hoc sensitivity (S1) without changing the v1 headline.
+- Replay: each day of each queue is replayed on its own through the engine's own `ServiceRateEstimator` and `predict_wait` with `ServiceRateSettings()` defaults (window 300 s, min_services 2, min_history 60 s, basis service_start). At each call's `q_start` the queue length is the number of other calls queued at that moment and the service rate uses only service events strictly before it (no look-ahead). Engine code is not changed.
+- Ground truth: actual wait = `q_exit - q_start` of AGENT calls. HANG calls left before service (censored): they enter no error metric; their number and how many hung up after a longer wait than predicted are reported.
+- Primary queue: queued calls of types PS, PE, NE, NW, TT. Sensitivity queues: all types (including IN and AA), and PS + PE only.
+- Baselines (same inputs): LES (wait of the last AGENT call to leave the queue before now, same day); recent mean (mean wait of the last 20 such calls, at least 5); queue-length regression `wait = a + b (queue length + 1)`, fitted on January-August primary AGENT calls (a = 19.36 s, b = 25.09 s per queue position) and then frozen.
+- Split by time: January-August training/exploration, September-October validation (60 days), November-December test (61 days, the headline). Nothing was chosen on validation or test months.
+- Uncertainty: 95 % percentile intervals from a day-level cluster bootstrap (10,000 resamples, seed 20261113), shown in square brackets. Calls within a day are correlated, so days are the unit. Paired differences use the same resampled days for both methods.
+- Two choices of the implementer that the protocol does not state, labelled here as **interpretations**: (1) the engine's `estimate()` is called once per distinct event time, and a service that starts at time T counts for predictions after T, not at T (keeps "strictly before t"); this has no numeric effect on the results. (2) The paired MAE difference is computed on the calls that both methods cover (n reported with each), because the protocol does not say how to treat different coverage.
+
+### Data quirks and exclusions (from the validation JSON)
+
+| Item | Count |
+|---|---|
+| Rows parsed (12 files) / unparseable | 444,448 / 0 |
+| Days | 363 |
+| PHANTOM rows excluded ("a virtual call to be ignored") | 3,599 |
+| Rows kept | 440,849 |
+| Rows with spaces instead of a tab (parsed by splitting on whitespace) | 12 |
+| Rows with a padded `type` value | 6 |
+| Calls crossing midnight | 702 |
+| Queued calls (`q_start` set or `q_time` > 0) | 260,013 (AGENT 196,007; HANG 64,006) |
+| `q_time` vs `q_exit - q_start`, `ser_time` vs `ser_exit - ser_start` | 0 mismatches in 260,013 and 353,700 rows |
+| Queued AGENT calls with no `ser_start` | 327 |
+| HANG calls that carry service times | 1,113 |
+| Served queued AGENT calls whose `ser_start` is after `q_exit` | 16 (of 195,680) |
+| Type `AA` (not in the documentation; all HANG) | 5 |
+| Primary queue: queued calls / AGENT / HANG | 249,590 / 189,640 / 59,950 |
+| Primary queue: calls still queued at or after 24:00 of their date, not carried to the next day | 51 (4 more start after 24:00 of their date) |
+
+### Results: test months (headline), primary queue, protocol v1
+
+| Method | Coverage, % | MAE, s | RMSE, s | Median abs. error, s | Bias, s | Within 30 s, % | Within 60 s, % |
+|---|---|---|---|---|---|---|---|
+| Prediction formula | 87.0 [85.5, 88.3] | 96.8 [91.4, 102.8] | 156.4 [145.6, 167.8] | 57.7 [55.0, 61.0] | +39.6 [+36.2, +43.3] | 30.3 [28.9, 31.7] | 51.5 [49.7, 53.3] |
+| Last to enter service (LES) | 99.8 [99.7, 99.8] | 77.2 [72.5, 82.0] | 114.9 [107.2, 122.9] | 50.0 [46.0, 53.0] | -14.0 [-15.6, -12.6] | 35.5 [33.6, 37.4] | 56.5 [54.1, 58.8] |
+| Recent mean (last 20) | 99.1 [98.9, 99.2] | 73.2 [67.9, 78.6] | 105.0 [96.7, 113.4] | 51.6 [48.2, 55.2] | -4.4 [-5.0, -3.8] | 30.7 [28.7, 32.7] | 56.5 [53.5, 59.4] |
+| Queue-length regression | 100.0 [100.0, 100.0] | 61.2 [58.0, 64.6] | 89.1 [82.2, 96.8] | 42.7 [41.4, 44.9] | +0.4 [-5.4, +5.7] | 33.5 [32.4, 34.6] | 63.9 [62.1, 65.7] |
+
+Calls: 36,479 answered (AGENT) calls over 61 days; the formula had a prediction for 31,754. Range coverage of the formula (actual wait inside its low-high range): 22.0 [20.8, 23.2] %.
+
+Paired MAE difference, formula minus baseline, on calls both cover (positive = formula worse): Last to enter service (LES) 17.0 [14.9, 19.2] s (n 31,754); Recent mean (last 20) 21.1 [19.0, 23.2] s (n 31,673); Queue-length regression 33.4 [30.4, 36.4] s (n 31,754).
+
+HANG calls (left before service; in no error metric): 10,762; 9,839 had a prediction; 1,700 hung up after waiting longer than predicted.
+
+### Results: validation months (September-October), primary queue, protocol v1
+
+| Method | Coverage, % | MAE, s | RMSE, s | Median abs. error, s | Bias, s | Within 30 s, % | Within 60 s, % |
+|---|---|---|---|---|---|---|---|
+| Prediction formula | 76.3 [72.9, 79.1] | 85.0 [80.4, 89.6] | 136.7 [126.8, 147.2] | 50.0 [47.0, 52.6] | +35.7 [+33.1, +38.3] | 34.5 [33.0, 36.2] | 56.5 [54.8, 58.5] |
+| Last to enter service (LES) | 99.6 [99.5, 99.7] | 61.0 [56.7, 64.8] | 92.2 [86.0, 97.8] | 38.0 [35.0, 41.0] | -9.9 [-11.5, -8.2] | 43.4 [41.2, 45.9] | 65.3 [63.0, 68.0] |
+| Recent mean (last 20) | 98.3 [98.0, 98.6] | 54.6 [49.9, 58.7] | 79.0 [72.5, 84.6] | 37.9 [34.6, 41.0] | -2.3 [-2.8, -1.8] | 40.3 [37.4, 43.7] | 69.1 [65.7, 73.0] |
+| Queue-length regression | 100.0 [100.0, 100.0] | 50.6 [48.0, 52.9] | 70.7 [66.2, 74.9] | 37.5 [36.4, 38.5] | +10.0 [+7.0, +13.0] | 37.9 [36.7, 39.4] | 71.4 [69.5, 73.6] |
+
+Calls: 19,234 answered (AGENT) calls over 60 days; the formula had a prediction for 14,677. Range coverage of the formula (actual wait inside its low-high range): 17.5 [15.7, 19.1] %.
+
+Paired MAE difference, formula minus baseline, on calls both cover (positive = formula worse): Last to enter service (LES) 20.2 [17.7, 22.7] s (n 14,677); Recent mean (last 20) 27.4 [24.3, 30.3] s (n 14,633); Queue-length regression 31.2 [28.4, 34.2] s (n 14,677).
+
+HANG calls (left before service; in no error metric): 4,040; 3,270 had a prediction; 843 hung up after waiting longer than predicted.
+
+The validation months show the same order: the formula is the worst of the four, and bias is positive (+35.7 s).
+
+### Sensitivity queues (protocol v1)
+
+MAE with 95 % intervals. The order (regression, then recent mean or LES, then the formula) is the same in every queue and split.
+
+| Queue | Split | Days | Answered calls | Formula MAE, s | LES | Recent mean | Regression | Formula coverage, % | Formula bias, s |
+|---|---|---|---|---|---|---|---|---|---|
+| All types (incl. IN, AA) | validation | 60 | 20,760 | 88.7 [84.7, 92.8] | 68.1 [64.4, 71.5] | 59.1 [55.3, 62.5] | 55.5 [53.3, 57.4] | 76.6 [73.3, 79.5] | +35.8 [+33.0, +38.5] |
+| All types (incl. IN, AA) | test | 61 | 38,666 | 103.0 [97.3, 109.2] | 84.3 [79.4, 89.3] | 77.0 [71.9, 82.3] | 66.9 [63.6, 70.3] | 87.6 [86.1, 88.9] | +41.8 [+38.0, +46.0] |
+| PS + PE only | validation | 60 | 14,028 | 73.5 [69.7, 77.3] | 51.4 [47.7, 54.8] | 49.1 [44.4, 53.5] | 43.0 [40.7, 45.3] | 71.1 [67.7, 74.1] | +20.4 [+18.0, +23.0] |
+| PS + PE only | test | 61 | 27,613 | 85.7 [80.6, 91.4] | 66.7 [62.0, 71.3] | 67.3 [62.0, 72.7] | 53.8 [49.6, 58.5] | 82.1 [80.2, 83.7] | +26.2 [+23.3, +29.4] |
+
+### Exploration (January-August only; separate; not used to choose anything)
+
+Service-rate window of the formula on the training months, primary queue, formula only. MAE is not comparable across windows without the coverage change: a short window gives predictions only when the queue is busy and fast.
+
+| Window, s | Answered calls (Jan-Aug) | Covered | Coverage, % | MAE, s | Bias, s |
+|---|---|---|---|---|---|
+| 60 | 133,927 | 46,344 | 34.6 [33.5, 35.7] | 61.4 [59.0, 64.0] | -33.9 [-36.2, -31.6] |
+| 120 | 133,927 | 86,097 | 64.3 [63.0, 65.6] | 74.1 [71.6, 76.8] | +4.2 [+2.6, +5.7] |
+| 300 (default) | 133,927 | 116,768 | 87.2 [86.2, 88.1] | 97.1 [93.8, 100.6] | +38.5 [+36.4, +40.7] |
+| 600 | 133,927 | 126,461 | 94.4 [93.9, 94.9] | 103.3 [100.2, 106.5] | +46.5 [+44.3, +48.7] |
+
+### Post-hoc S1: "all service starts" (protocol v2 addendum; separate; post hoc)
+
+**Why.** Review of the scoring code found that the version-1 service events counted only calls that queued. Agents also served calls that never queued: 25,255 of 61,673 AGENT calls of the primary types with a service start in November-December (41 %) (computed with the repository parser on the local raw files). The v1 service rate therefore undercounts how fast the agents were working, and the formula over-predicts. The video engine counts every service start it sees at the service point, so S1 is closer to what the engine would see.
+
+**Definition.** Identical to v1, except that service events are the `ser_start` of every AGENT call of the queue's types with a service start, queued or not, strictly before the prediction time. Queue length, ground truth, baselines, splits, metrics and bootstrap are unchanged.
+
+**Status.** Both the v1 headline and S1 are correct executions of their definitions. S1 was chosen after the test months were seen, so it is a **post-hoc sensitivity** and **never replaces the v1 headline**. It is shown next to it.
+
+| Method | Coverage, % | MAE, s | RMSE, s | Median abs. error, s | Bias, s | Within 30 s, % | Within 60 s, % |
+|---|---|---|---|---|---|---|---|
+| Prediction formula | 99.0 [98.7, 99.2] | 79.6 [73.9, 85.5] | 132.4 [120.9, 144.1] | 46.0 [43.0, 49.0] | +13.2 [+9.6, +16.8] | 36.4 [34.5, 38.3] | 59.2 [56.9, 61.4] |
+| Last to enter service (LES) | 99.8 [99.7, 99.8] | 77.2 [72.5, 82.0] | 114.9 [107.2, 122.9] | 50.0 [46.0, 53.0] | -14.0 [-15.6, -12.6] | 35.5 [33.6, 37.4] | 56.5 [54.1, 58.8] |
+| Recent mean (last 20) | 99.1 [98.9, 99.2] | 73.2 [67.9, 78.6] | 105.0 [96.7, 113.4] | 51.6 [48.2, 55.2] | -4.4 [-5.0, -3.8] | 30.7 [28.7, 32.7] | 56.5 [53.5, 59.4] |
+| Queue-length regression | 100.0 [100.0, 100.0] | 61.2 [58.0, 64.6] | 89.1 [82.2, 96.8] | 42.7 [41.4, 44.9] | +0.4 [-5.4, +5.7] | 33.5 [32.4, 34.6] | 63.9 [62.1, 65.7] |
+
+Calls: 36,479 answered (AGENT) calls over 61 days; the formula had a prediction for 36,106. Range coverage of the formula (actual wait inside its low-high range): 21.5 [20.3, 22.7] %.
+
+Paired MAE difference, formula minus baseline, on calls both cover (positive = formula worse): Last to enter service (LES) 2.7 [0.9, 4.6] s (n 36,057); Recent mean (last 20) 6.8 [5.2, 8.6] s (n 35,838); Queue-length regression 18.5 [15.6, 21.5] s (n 36,106).
+
+HANG calls (left before service; in no error metric): 10,762; 10,545 had a prediction; 2,268 hung up after waiting longer than predicted.
+
+S1 validation months (post hoc):
+
+| Method | Coverage, % | MAE, s | RMSE, s | Median abs. error, s | Bias, s | Within 30 s, % | Within 60 s, % |
+|---|---|---|---|---|---|---|---|
+| Prediction formula | 99.1 [98.8, 99.3] | 61.0 [55.9, 66.1] | 101.7 [89.8, 114.4] | 36.0 [33.7, 38.0] | +0.4 [-3.0, +3.8] | 43.8 [41.5, 46.3] | 68.2 [65.9, 70.9] |
+| Last to enter service (LES) | 99.6 [99.5, 99.7] | 61.0 [56.7, 64.8] | 92.2 [86.0, 97.8] | 38.0 [35.0, 41.0] | -9.9 [-11.5, -8.2] | 43.4 [41.2, 45.9] | 65.3 [63.0, 68.0] |
+| Recent mean (last 20) | 98.3 [98.0, 98.6] | 54.6 [49.9, 58.7] | 79.0 [72.5, 84.6] | 37.9 [34.6, 41.0] | -2.3 [-2.8, -1.8] | 40.3 [37.4, 43.7] | 69.1 [65.7, 73.0] |
+| Queue-length regression | 100.0 [100.0, 100.0] | 50.6 [48.0, 52.9] | 70.7 [66.2, 74.9] | 37.5 [36.4, 38.5] | +10.0 [+7.0, +13.0] | 37.9 [36.7, 39.4] | 71.4 [69.5, 73.6] |
+
+Calls: 19,234 answered (AGENT) calls over 60 days; the formula had a prediction for 19,058. Range coverage of the formula (actual wait inside its low-high range): 17.3 [15.9, 18.6] %.
+
+Paired MAE difference, formula minus baseline, on calls both cover (positive = formula worse): Last to enter service (LES) 0.3 [-1.4, 2.3] s (n 19,002); Recent mean (last 20) 6.8 [4.8, 9.2] s (n 18,778); Queue-length regression 10.5 [7.4, 13.9] s (n 19,058).
+
+HANG calls (left before service; in no error metric): 4,040; 3,959 had a prediction; 1,418 hung up after waiting longer than predicted.
+
+Reading: counting all service starts removes most of the bias (+39.6 s to +13.2 s on test) and raises coverage to 99 %, but on the test months the formula is still worse than all three baselines (paired difference to LES 2.7 s [0.9, 4.6]); on validation it is level with LES (0.3 s [-1.4, 2.3]) and still worse than the other two. Range coverage stays low (21.5 % on test).
+
+### Why the formula loses, and what limits the explanation
+
+- v1 service events cover only queued calls (see S1); about 41 % of the served calls are invisible to the rate.
+- The error depends strongly on queue length (v1, test, formula MAE and bias by queue length at the call's start): 0 waiting 46.5 s and -46.5 s (every error is an under-prediction), 1-2 waiting 65.9 s and +12.1 s, 3-5 waiting 111.4 s and +62.2 s, 6-10 waiting 174.4 s and +135.2 s, more than 10 waiting 346.1 s and +316.1 s. The regression on the same bands has MAE 34.7, 54.5, 73.6, 94.3 and 120.8 s. Full breakdowns (hour, queue-length band, priority, type, all methods) are in the JSON under `queues.primary.{validation,test}.breakdowns`.
+- Priority customers jump the queue (priority credit of 1.5 minutes), so a call's wait is not set by the queue length at its start alone.
+- **Abandonment limit:** a HANG call drains the queue but is not a service. The formula divides by the rate of services only, so when many callers hang up the queue shrinks without any service being counted and the formula over-predicts. This cannot be fixed by counting more services, which is why S1 still has +13.2 s bias. On test, 1,700 of 9,839 HANG calls with a prediction hung up after waiting longer than predicted (2,268 of 10,545 under S1).
+- The causes above are the reviewer's finding and the checks listed; they were not tested one by one on the test months, and no variant was tuned on them.
+
+### Little's law check (primary queue, all months, 360 days with queued primary calls)
+
+For each hour of the day: time-average queue length divided by (arrival rate x mean wait of all queued calls). The ratio is 0.965 to 1.024 in every hour from 07:00 to 23:59 and 0.84 to 1.10 in hours 0 to 6 (hour 2: 0.84, hour 3: 1.10; those hours have very few calls). The logs are internally consistent: the queue lengths reconstructed from the log agree with the recorded waits.
+
+### Figures (gitignored, local only)
+
+`outputs/figures/anonymous_bank/`: `headline_mae_test.png`, `predicted_vs_actual_test.png`, `error_histogram_test.png`, `mae_by_hour_test.png`, `mae_by_queue_length_test.png`, `littles_law.png`, `exploration_windows_train.png`, `post_hoc_s1_mae_test.png`.
+
+### Limits
+
+- A phone queue, not people standing in line; priority customers get 1.5 minutes of credit, so service is not first come, first served; one call centre in 1999 with 8 regular agents.
+- The documentation does not say whether call types share one queue; the primary queue assumes they share the regular agents.
+- The formula assumes a steady service rate over the last 5 minutes. The event-driven replay calls `estimate()` at event times, not once per video frame, so the formula's low-high range (the min-max of recent rates) may differ from what the video engine would give; the range coverage here is a property of this replay.
+- The queue lengths in the logs are exact; the video engine's are noisy counts. The logs say nothing about how good camera counts are.
+- Intervals reflect day-to-day variation within one year at one centre, not variation between centres.
+- S1 is post hoc; the 41 % figure is the November-December share and was computed on the raw files, not stored in the eval JSON.
+
+### What this supports, and what it does not
+
+Supports: on this phone queue, the formula (queue length divided by the last five minutes' service rate) has a positive bias of about 40 s, is less accurate than a one-line baseline, and is not rescued by counting all service starts; a regression of wait on queue length does better on the same inputs.
+
+Does not support: any claim about QueueVision's waiting-time accuracy on cameras (the cameras were not involved); any claim that the formula would work or fail at a bank branch, a shop or an airport; any claim about the video counts. Whether a different rate estimate would do better on camera data was not tested.
 
 ## Sprint 8: browser checklist for a person (PENDING, not run)
 
