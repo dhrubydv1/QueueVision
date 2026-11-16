@@ -136,3 +136,21 @@ A phone queue, not people standing in line; priority customers get 1.5 minutes o
 queue is not first come, first served; one call centre in 1999 with 8 regular agents; the formula
 assumes a steady service rate over the last 5 minutes; whether call types share one queue is not
 documented.
+
+## Version 2 addendum (16 Nov 2026) — post-hoc sensitivity analysis
+
+Added **after** the version-1 results on validation and test months were seen. It changes
+nothing in version 1: the version-1 headline stays the headline. Everything below is reported
+separately and labelled **post hoc**.
+
+- **Reason.** Review of the version-1 scoring found that the service events counted only calls that
+  queued. Agents also served calls that never queued (41 % of `AGENT` calls of the primary types in
+  November–December), so the version-1 service rate undercounts how fast the agents were working.
+- **Post-hoc sensitivity S1 ("all service starts"):** identical to version 1 except that service
+  events are the `ser_start` of **every** `AGENT` call of the queue's types with `ser_start` set,
+  queued or not, strictly before *t*. Queue length, ground truth, baselines, splits, metrics and
+  bootstrap are unchanged.
+- Reported for validation and test months next to (never instead of) the version-1 headline.
+- The video engine counts service starts it sees at the service point, whoever they are; S1 is
+  closer to that, which is why it is worth showing. It cannot replace the headline because it was
+  chosen after the test months were seen.
