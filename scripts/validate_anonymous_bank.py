@@ -16,8 +16,20 @@ sys.path.insert(0, str(ROOT))
 
 from ai_engine.data.anonymous_bank import ParseStats, parse_month, validate_records, write_tidy  # noqa: E402
 
-MONTHS = ["January", "February", "March", "April", "May", "June", "July",
-          "August", "September", "October", "November", "December"]
+MONTHS = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+]
 
 
 def main() -> None:

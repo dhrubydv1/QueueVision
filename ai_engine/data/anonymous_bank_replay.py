@@ -60,7 +60,8 @@ def select_queue(records: Iterable[CallRecord], definition: str = "primary") -> 
     """Queued AGENT/HANG calls of the queue definition (PHANTOM, never-queued excluded)."""
     types = QUEUE_DEFINITIONS[definition]
     return [
-        r for r in records
+        r
+        for r in records
         if r.queued and r.outcome in ("AGENT", "HANG") and (types is None or r.type in types)
     ]
 
@@ -143,15 +144,24 @@ def replay_day(
             c = ordered[i]
             p = predict_wait(qlens[i], rate)
             ok = p.status == "ok"
-            out.append(Prediction(
-                call_key=c.call_key, date=c.date, type=c.type, priority=c.priority,
-                outcome=c.outcome, q_start=c.q_start_ts, q_exit=c.q_exit_ts,
-                wait=c.q_exit_ts - c.q_start_ts, queue_length=qlens[i],
-                pred=p.predicted_wait_s if ok else None,
-                low=p.low_s if ok else None, high=p.high_s if ok else None,
-                les=float(recent[-1]) if recent else None,
-                recent_mean=sum(recent) / len(recent) if len(recent) >= RECENT_MIN else None,
-            ))
+            out.append(
+                Prediction(
+                    call_key=c.call_key,
+                    date=c.date,
+                    type=c.type,
+                    priority=c.priority,
+                    outcome=c.outcome,
+                    q_start=c.q_start_ts,
+                    q_exit=c.q_exit_ts,
+                    wait=c.q_exit_ts - c.q_start_ts,
+                    queue_length=qlens[i],
+                    pred=p.predicted_wait_s if ok else None,
+                    low=p.low_s if ok else None,
+                    high=p.high_s if ok else None,
+                    les=float(recent[-1]) if recent else None,
+                    recent_mean=sum(recent) / len(recent) if len(recent) >= RECENT_MIN else None,
+                )
+            )
     return out
 
 

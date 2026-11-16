@@ -25,9 +25,20 @@ N_FIELDS = 17
 OUTCOMES = ("AGENT", "HANG", "PHANTOM")
 
 TIDY_COLUMNS = [
-    "call_key", "date", "type", "priority", "queued",
-    "q_start_ts", "q_exit_ts", "ser_start_ts", "ser_exit_ts",
-    "outcome", "server", "vru_time", "q_time", "ser_time",
+    "call_key",
+    "date",
+    "type",
+    "priority",
+    "queued",
+    "q_start_ts",
+    "q_exit_ts",
+    "ser_start_ts",
+    "ser_exit_ts",
+    "outcome",
+    "server",
+    "vru_time",
+    "q_time",
+    "ser_time",
 ]
 
 
@@ -188,9 +199,20 @@ def tidy_row(r: CallRecord) -> list:
         return "" if x is None else x
 
     return [
-        r.call_key, r.date.isoformat(), r.type, r.priority, int(r.queued),
-        v(r.q_start_ts), v(r.q_exit_ts), v(r.ser_start_ts), v(r.ser_exit_ts),
-        r.outcome, r.server, r.vru_time, r.q_time, r.ser_time,
+        r.call_key,
+        r.date.isoformat(),
+        r.type,
+        r.priority,
+        int(r.queued),
+        v(r.q_start_ts),
+        v(r.q_exit_ts),
+        v(r.ser_start_ts),
+        v(r.ser_exit_ts),
+        r.outcome,
+        r.server,
+        r.vru_time,
+        r.q_time,
+        r.ser_time,
     ]
 
 
@@ -211,7 +233,10 @@ def _diff_dist(diffs: list[int]) -> dict:
     c = Counter("0" if d == 0 else "+1" if d == 1 else "-1" if d == -1 else "other" for d in diffs)
     return {
         "n": len(diffs),
-        "zero": c["0"], "plus_1s": c["+1"], "minus_1s": c["-1"], "other": c["other"],
+        "zero": c["0"],
+        "plus_1s": c["+1"],
+        "minus_1s": c["-1"],
+        "other": c["other"],
         "min": min(diffs) if diffs else None,
         "max": max(diffs) if diffs else None,
     }

@@ -18,10 +18,22 @@ D = dt.date(1999, 1, 4)
 
 def call(key, qs, qx, ss=None, out="AGENT", typ="PS", ve=None, prio=2, queued=True):
     return CallRecord(
-        call_key=key, date=D, type=typ, priority=prio, queued=queued,
-        vru_entry_ts=qs - 5 if ve is None else ve, vru_exit_ts=qs, q_start_ts=qs, q_exit_ts=qx,
-        ser_start_ts=ss, ser_exit_ts=None if ss is None else ss + 100, outcome=out,
-        server="X", vru_time=5, q_time=qx - qs, ser_time=100,
+        call_key=key,
+        date=D,
+        type=typ,
+        priority=prio,
+        queued=queued,
+        vru_entry_ts=qs - 5 if ve is None else ve,
+        vru_exit_ts=qs,
+        q_start_ts=qs,
+        q_exit_ts=qx,
+        ser_start_ts=ss,
+        ser_exit_ts=None if ss is None else ss + 100,
+        outcome=out,
+        server="X",
+        vru_time=5,
+        q_time=qx - qs,
+        ser_time=100,
     )
 
 
@@ -49,8 +61,12 @@ def test_adapter_self_consistent_with_direct_engine_calls():
     cs = synthetic()
     preds = by_key(replay_day(cs))
     services = sorted(c.ser_start_ts for c in cs if c.outcome == "AGENT")
-    times = sorted({c.q_start_ts for c in cs} | {c.q_exit_ts for c in cs} | set(services)
-                   | {c.ser_start_ts for c in cs if c.outcome == "HANG"})
+    times = sorted(
+        {c.q_start_ts for c in cs}
+        | {c.q_exit_ts for c in cs}
+        | set(services)
+        | {c.ser_start_ts for c in cs if c.outcome == "HANG"}
+    )
     ordered = sorted(cs, key=lambda c: (c.q_start_ts, c.vru_entry_ts, c.call_key))
     est = ServiceRateEstimator(ServiceRateSettings(), start_s=0.0)
     added = 0
@@ -64,8 +80,11 @@ def test_adapter_self_consistent_with_direct_engine_calls():
             if c.q_start_ts != T:
                 continue
             ck = (c.q_start_ts, c.vru_entry_ts, c.call_key)
-            ql = sum(1 for o in ordered if o is not c and o.q_exit_ts > T
-                     and (o.q_start_ts, o.vru_entry_ts, o.call_key) < ck)
+            ql = sum(
+                1
+                for o in ordered
+                if o is not c and o.q_exit_ts > T and (o.q_start_ts, o.vru_entry_ts, o.call_key) < ck
+            )
             exp = predict_wait(ql, rate)
             got = preds[c.call_key]
             assert got.queue_length == ql
@@ -137,10 +156,18 @@ def test_no_look_ahead_append_and_shuffle():
         if p.q_start <= t:
             q = withx[k]
             assert (q.pred, q.low, q.high, q.queue_length, q.les, q.recent_mean) == (
-                p.pred, p.low, p.high, p.queue_length, p.les, p.recent_mean)
+                p.pred,
+                p.low,
+                p.high,
+                p.queue_length,
+                p.les,
+                p.recent_mean,
+            )
     # changing the future of the early calls (exits/services after t) is also harmless
-    mod = [c if c.q_start_ts <= t else call(c.call_key, c.q_start_ts, c.q_exit_ts + 999, ss=c.q_exit_ts + 999)
-           for c in cs]
+    mod = [
+        c if c.q_start_ts <= t else call(c.call_key, c.q_start_ts, c.q_exit_ts + 999, ss=c.q_exit_ts + 999)
+        for c in cs
+    ]
     m = by_key(replay_day(mod))
     for c in cs:
         if c.q_start_ts <= t:
@@ -150,9 +177,9 @@ def test_no_look_ahead_append_and_shuffle():
 
 def test_tie_order_and_strict_rules():
     a = call("a", 100, 200, ve=90)
-    b = call("b", 100, 300, ve=95)   # same q_start, later vru_entry: sees a, a does not see b
-    c = call("c", 100, 300, ve=95)   # same vru_entry: ordered by key
-    d = call("d", 200, 400)          # a exits exactly at 200: not counted
+    b = call("b", 100, 300, ve=95)  # same q_start, later vru_entry: sees a, a does not see b
+    c = call("c", 100, 300, ve=95)  # same vru_entry: ordered by key
+    d = call("d", 200, 400)  # a exits exactly at 200: not counted
     p = by_key(replay_day([b, a, d, c]))
     assert [p[k].queue_length for k in "abcd"] == [0, 1, 2, 2]
     assert queue_lengths([a, b, c, d]) == [0, 1, 2, 2]
@@ -168,8 +195,11 @@ def test_service_event_strictly_before_t_and_hang_excluded():
     for s in (100, 110):
         ref.add_service(float(s))
     # services strictly before 120: 100, 110 (and none at/after); 120 and HANG excluded
-    times = sorted({c.q_start_ts for c in [*cs, probe, h]} | {c.q_exit_ts for c in [*cs, probe, h]}
-                   | {c.ser_start_ts for c in cs if c.ser_start_ts})
+    times = sorted(
+        {c.q_start_ts for c in [*cs, probe, h]}
+        | {c.q_exit_ts for c in [*cs, probe, h]}
+        | {c.ser_start_ts for c in cs if c.ser_start_ts}
+    )
     est = ServiceRateEstimator(ServiceRateSettings(), 0.0)
     allsv = sorted(c.ser_start_ts for c in cs if c.ser_start_ts)
     i = 0
@@ -193,8 +223,12 @@ def test_baselines_and_population():
     assert abs(p.recent_mean - sum(waits[-20:]) / 20) < 1e-9
     early = by_key(replay_day(cs))["w0"]
     assert early.les is None and early.recent_mean is None
-    recs = [call("x", 1, 2, typ="IN"), call("y", 1, 2, typ="PS"), call("z", 1, 2, out="PHANTOM"),
-            call("n", 1, 2, queued=False)]
+    recs = [
+        call("x", 1, 2, typ="IN"),
+        call("y", 1, 2, typ="PS"),
+        call("z", 1, 2, out="PHANTOM"),
+        call("n", 1, 2, queued=False),
+    ]
     assert [r.call_key for r in select_queue(recs, "primary")] == ["y"]
     assert [r.call_key for r in select_queue(recs, "all_types")] == ["x", "y"]
 

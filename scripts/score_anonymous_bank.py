@@ -47,11 +47,27 @@ from ai_engine.evaluation.anonymous_bank_metrics import (  # noqa: E402
 from ai_engine.queue.camera_config import ServiceRateSettings  # noqa: E402
 
 PROTOCOL_VERSION = 1
-MONTHS = ["January", "February", "March", "April", "May", "June", "July",
-          "August", "September", "October", "November", "December"]
+MONTHS = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+]
 COLORS = {"predictor": "#1f77b4", "les": "#ff7f0e", "recent_mean": "#2ca02c", "regression": "#9467bd"}
-LABELS = {"predictor": "QueueVision predictor", "les": "Last to enter service",
-          "recent_mean": "Recent mean (20)", "regression": "Queue-length regression"}
+LABELS = {
+    "predictor": "QueueVision predictor",
+    "les": "Last to enter service",
+    "recent_mean": "Recent mean (20)",
+    "regression": "Queue-length regression",
+}
 
 
 def split_preds(preds):
@@ -85,17 +101,21 @@ def main() -> None:
 
     result: dict = {
         "protocol_version": PROTOCOL_VERSION,
-        "seed": bs.SEED, "n_resamples": bs.N_RESAMPLES,
+        "seed": bs.SEED,
+        "n_resamples": bs.N_RESAMPLES,
         "interval": "95% percentile, day-level cluster bootstrap",
         "service_rate_settings": "ServiceRateSettings() defaults (window 300 s, min_services 2, "
-                                 "min_history 60 s, basis service_start)",
+        "min_history 60 s, basis service_start)",
         "caveat": "Phone queue, 1999, Israel; measures the prediction formula, not the cameras.",
         "input_file_sha256": {},
-        "regression_baseline": {"fitted_on": "January-August primary-queue AGENT calls",
-                                "a_s": a_coef, "b_s_per_queue_position": b_coef,
-                                "form": "wait = a + b * (queue_length + 1)"},
+        "regression_baseline": {
+            "fitted_on": "January-August primary-queue AGENT calls",
+            "a_s": a_coef,
+            "b_s_per_queue_position": b_coef,
+            "form": "wait = a + b * (queue_length + 1)",
+        },
         "paired_note": "MAE difference = MAE(predictor) - MAE(baseline) on calls covered by both; "
-                       "negative favours the predictor.",
+        "negative favours the predictor.",
         "population": {},
         "queues": {},
     }
@@ -117,8 +137,12 @@ def main() -> None:
         for split in ("validation", "test"):
             fr = Frame(sp[qname][split], reg)
             frames[(qname, split)] = fr
-            blk = {"n_days": fr.n_days, "methods": {m: method_metrics(fr, m) for m in METHODS},
-                   "hang": hang_report(fr), "paired_mae_difference": paired_vs_baselines(fr)}
+            blk = {
+                "n_days": fr.n_days,
+                "methods": {m: method_metrics(fr, m) for m in METHODS},
+                "hang": hang_report(fr),
+                "paired_mae_difference": paired_vs_baselines(fr),
+            }
             if qname == "primary":
                 blk["breakdowns"] = {m: breakdowns(fr, m) for m in METHODS}
             result["queues"][qname][split] = blk
@@ -135,26 +159,37 @@ def main() -> None:
     }
 
     # Post hoc S1 (protocol v2 addendum): service events = every AGENT ser_start of the types.
-    s1_preds = split_preds(replay_queue(
-        queues["primary"], all_service_starts=all_service_starts_by_day(kept, "primary")))
+    s1_preds = split_preds(
+        replay_queue(queues["primary"], all_service_starts=all_service_starts_by_day(kept, "primary"))
+    )
     s1 = {}
     for split in ("validation", "test"):
         fr1 = Frame(s1_preds[split], reg)
         frames[("S1", split)] = fr1
-        s1[split] = {"n_days": fr1.n_days, "methods": {m: method_metrics(fr1, m) for m in METHODS},
-                     "hang": hang_report(fr1), "paired_mae_difference": paired_vs_baselines(fr1)}
-    result["post_hoc_sensitivity"] = {"S1_all_service_starts": {
-        "protocol_version": 2, "post_hoc": True,
-        "definition": "Primary queue; service events = ser_start of every AGENT call of the primary "
-                      "types with ser_start set, queued or not, strictly before t. Everything else "
-                      "as version 1 (baselines identical). Chosen after the v1 results were seen; "
-                      "never replaces the v1 headline.",
-        **s1}}
+        s1[split] = {
+            "n_days": fr1.n_days,
+            "methods": {m: method_metrics(fr1, m) for m in METHODS},
+            "hang": hang_report(fr1),
+            "paired_mae_difference": paired_vs_baselines(fr1),
+        }
+    result["post_hoc_sensitivity"] = {
+        "S1_all_service_starts": {
+            "protocol_version": 2,
+            "post_hoc": True,
+            "definition": "Primary queue; service events = ser_start of every AGENT call of the primary "
+            "types with ser_start set, queued or not, strictly before t. Everything else "
+            "as version 1 (baselines identical). Chosen after the v1 results were seen; "
+            "never replaces the v1 headline.",
+            **s1,
+        }
+    }
 
     # Little's law, primary queue, all months.
     by_day = group_by_day(queues["primary"])
     result["littles_law_primary_all_months"] = {
-        "n_days": len(by_day), "per_hour": little_law(by_day, len(by_day))}
+        "n_days": len(by_day),
+        "per_hour": little_law(by_day, len(by_day)),
+    }
 
     result["runtime_s"] = round(time.time() - t0, 1)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
@@ -172,8 +207,9 @@ def make_figures(result, frames, figs: Path) -> None:
     fig, ax = plt.subplots(figsize=(7, 4))
     for i, m in enumerate(METHODS):
         v = t["methods"][m]["mae_s"]
-        ax.bar(i, v["value"], color=COLORS[m], yerr=[[v["value"] - v["lo"]], [v["hi"] - v["value"]]],
-               capsize=4)
+        ax.bar(
+            i, v["value"], color=COLORS[m], yerr=[[v["value"] - v["lo"]], [v["hi"] - v["value"]]], capsize=4
+        )
     ax.set_xticks(range(4), [LABELS[m] for m in METHODS], rotation=15, ha="right")
     ax.set_ylabel("MAE on test months (s)")
     ax.set_title("Nov-Dec 1999, primary queue: MAE with 95% day-bootstrap interval")
@@ -184,8 +220,15 @@ def make_figures(result, frames, figs: Path) -> None:
     # 2 predicted vs actual
     mk = fr.mask("predictor")
     fig, ax = plt.subplots(figsize=(5.5, 5))
-    hb = ax.hexbin(fr.wait[mk], fr.m["predictor"][mk], gridsize=50, bins="log", mincnt=1,
-                   extent=(0, 600, 0, 600), cmap="viridis")
+    hb = ax.hexbin(
+        fr.wait[mk],
+        fr.m["predictor"][mk],
+        gridsize=50,
+        bins="log",
+        mincnt=1,
+        extent=(0, 600, 0, 600),
+        cmap="viridis",
+    )
     ax.plot([0, 600], [0, 600], "r--", lw=1, label="perfect")
     ax.set_xlabel("Actual wait (s)")
     ax.set_ylabel("Predicted wait (s)")
@@ -200,8 +243,13 @@ def make_figures(result, frames, figs: Path) -> None:
     fig, ax = plt.subplots(figsize=(6.5, 4))
     for m in ("predictor", "les", "recent_mean", "regression"):
         k = fr.mask(m)
-        ax.hist(np.clip(fr.m[m][k] - fr.wait[k], -300, 300), bins=60, histtype="step",
-                color=COLORS[m], label=LABELS[m])
+        ax.hist(
+            np.clip(fr.m[m][k] - fr.wait[k], -300, 300),
+            bins=60,
+            histtype="step",
+            color=COLORS[m],
+            label=LABELS[m],
+        )
     ax.set_xlabel("Predicted - actual wait (s), clipped at +-300")
     ax.set_ylabel("AGENT calls")
     ax.legend(fontsize=8)
@@ -215,8 +263,14 @@ def make_figures(result, frames, figs: Path) -> None:
     fig, ax = plt.subplots(figsize=(8, 4))
     for m in METHODS:
         hs = [h for h in range(24) if "mae_s" in bd[m]["hour"][str(h)]]
-        ax.plot(hs, [bd[m]["hour"][str(h)]["mae_s"]["value"] for h in hs], marker="o", ms=3,
-                color=COLORS[m], label=LABELS[m])
+        ax.plot(
+            hs,
+            [bd[m]["hour"][str(h)]["mae_s"]["value"] for h in hs],
+            marker="o",
+            ms=3,
+            color=COLORS[m],
+            label=LABELS[m],
+        )
     ax.set_xlabel("Hour of day")
     ax.set_ylabel("MAE (s)")
     ax.legend(fontsize=8)
@@ -262,11 +316,16 @@ def make_figures(result, frames, figs: Path) -> None:
     # 8 post hoc S1 vs headline predictor
     s1t = result["post_hoc_sensitivity"]["S1_all_service_starts"]["test"]["methods"]["predictor"]
     fig, ax = plt.subplots(figsize=(5.5, 4))
-    for i, v in enumerate([t["methods"]["predictor"]["mae_s"],
-                                  s1t["mae_s"],
-                                  t["methods"]["regression"]["mae_s"]]):
-        ax.bar(i, v["value"], yerr=[[v["value"] - v["lo"]], [v["hi"] - v["value"]]], capsize=4,
-               color=["#1f77b4", "#aec7e8", "#9467bd"][i])
+    for i, v in enumerate(
+        [t["methods"]["predictor"]["mae_s"], s1t["mae_s"], t["methods"]["regression"]["mae_s"]]
+    ):
+        ax.bar(
+            i,
+            v["value"],
+            yerr=[[v["value"] - v["lo"]], [v["hi"] - v["value"]]],
+            capsize=4,
+            color=["#1f77b4", "#aec7e8", "#9467bd"][i],
+        )
     ax.set_xticks(range(3), ["v1 predictor", "S1 predictor\n(post hoc)", "Regression"])
     ax.set_ylabel("MAE on test months (s)")
     ax.set_title("Post-hoc S1 next to the v1 headline")
@@ -279,9 +338,13 @@ def make_figures(result, frames, figs: Path) -> None:
     fig, ax = plt.subplots(figsize=(5.5, 4))
     ws = list(ex)
     vals = [ex[w]["mae_s"] for w in ws]
-    ax.errorbar(range(len(ws)), [v["value"] for v in vals],
-                yerr=[[v["value"] - v["lo"] for v in vals], [v["hi"] - v["value"] for v in vals]],
-                fmt="o", capsize=4)
+    ax.errorbar(
+        range(len(ws)),
+        [v["value"] for v in vals],
+        yerr=[[v["value"] - v["lo"] for v in vals], [v["hi"] - v["value"] for v in vals]],
+        fmt="o",
+        capsize=4,
+    )
     ax.set_xticks(range(len(ws)), [f"{w} s" for w in ws])
     ax.set_xlabel("Service-rate window")
     ax.set_ylabel("MAE (s), Jan-Aug (exploration)")

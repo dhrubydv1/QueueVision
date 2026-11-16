@@ -44,9 +44,7 @@ def percentile_interval(samples: np.ndarray, level: float = LEVEL) -> tuple[floa
     return float(lo), float(hi)
 
 
-def bootstrap_stat(
-    stats: np.ndarray, counts: np.ndarray, fn: Callable[[np.ndarray], np.ndarray]
-) -> Interval:
+def bootstrap_stat(stats: np.ndarray, counts: np.ndarray, fn: Callable[[np.ndarray], np.ndarray]) -> Interval:
     """Interval for ``fn`` of the summed per-day statistics (``fn`` maps (R, k) -> (R,))."""
     with np.errstate(divide="ignore", invalid="ignore"):
         point = float(fn(stats.sum(axis=0, keepdims=True))[0])

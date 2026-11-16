@@ -64,8 +64,11 @@ def method_metrics(fr: Frame, method: str) -> dict:
     if fr.n_days == 0:
         return out
     c = fr.counts
-    out["coverage"] = iv(bs.bootstrap_stat(
-        bs.day_sums(fr.day, [cov_mask, fr.agent], fr.n_days), c, lambda t: t[:, 0] / t[:, 1]))
+    out["coverage"] = iv(
+        bs.bootstrap_stat(
+            bs.day_sums(fr.day, [cov_mask, fr.agent], fr.n_days), c, lambda t: t[:, 0] / t[:, 1]
+        )
+    )
     d = fr.day[cov_mask]
     err = fr.m[method][cov_mask] - fr.wait[cov_mask]
     if len(err) == 0:
@@ -104,8 +107,10 @@ def paired_vs_baselines(fr: Frame) -> dict:
             continue
         a = np.abs(fr.m["predictor"][mk] - fr.wait[mk])
         b = np.abs(fr.m[base][mk] - fr.wait[mk])
-        out[base] = {"n_common": int(mk.sum()),
-                     "mae_diff_s": iv(bs.bootstrap_mean_difference(a, b, fr.day[mk], fr.counts))}
+        out[base] = {
+            "n_common": int(mk.sum()),
+            "mae_diff_s": iv(bs.bootstrap_mean_difference(a, b, fr.day[mk], fr.counts)),
+        }
     return out
 
 
@@ -167,7 +172,10 @@ def little_law(calls_by_day: dict, n_days: int) -> dict:
         W = wsum[h] / arr[h] if arr[h] else None
         lw = lam * W if W is not None else None
         out[str(h)] = {
-            "time_avg_queue_length": L, "arrivals_per_s": lam, "mean_wait_s": W,
-            "lambda_times_W": lw, "ratio_L_over_lambdaW": (L / lw) if lw else None,
+            "time_avg_queue_length": L,
+            "arrivals_per_s": lam,
+            "mean_wait_s": W,
+            "lambda_times_W": lw,
+            "ratio_L_over_lambdaW": (L / lw) if lw else None,
         }
     return out
