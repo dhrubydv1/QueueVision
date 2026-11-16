@@ -1,9 +1,144 @@
 # Testing Report
 
-The Anonymous Bank call-centre results (predictor accuracy on real call-centre queues) come first, then the Sprint 8 browser checklist (pending, for a person) and pacing investigation, then Sprint 7 (session 2) results, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
+The fix-pass session 2 evidence (clip-bootstrap intervals, IoU 0.5/0.3 attribution, detector and tracker comparisons) comes first, then the Anonymous Bank call-centre results (predictor accuracy on real call-centre queues), then the Sprint 8 browser checklist (pending, for a person) and pacing investigation, then Sprint 7 (session 2) results, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
 kept at the end. Every number here comes from a command that was actually run
 on the machine described under Sprint 2 (same environment). Nothing was
 estimated.
+
+## Fix pass, session 2: uncertainty and detector/tracker comparisons (`fix/evaluation`, 2026-11-16)
+
+**Result in one sentence: the current default (YOLO11n + ByteTrack) stays; none of the three candidates (YOLO11s + ByteTrack, YOLO11n + BoT-SORT, YOLO11n + BoT-SORT with re-identification) passes the adoption rule committed before the comparison.** The held-out queue-length MAE of the default is 1.62 people, 95 % clip-bootstrap interval 0.97 to 2.03, from 4 clips (285 frames).
+
+All numbers in this section come from `outputs/s9_eval/` (local, gitignored; `intervals_default.json`, `attribution_default.json`, `comparisons.json`, `{A,B,C,D}/`, `gmc/`, `repro/`) or from the commands named here. The protocol is [evaluation_protocol.md](evaluation_protocol.md) version 1, written and committed (`84a0b43`) by the controller before any comparison was run. Nothing earlier in this report was changed.
+
+### Method
+
+- Reproduction first: the Sprint 5/6 figures were re-run from the existing scripts and matched exactly before anything new was added (test MAE 1.619, bias +0.960, within +-1 0.537, 285 frames; val MAE 1.176, 122 frames; MOT17-04 IDF1 0.412; MOT17-09 IDF1 0.508; `outputs/s9_eval/repro/`). The new `queue_640.json` equals the Sprint 6 file apart from `generated_at`.
+- Splits: from `datasets/splits/`. Val (tuning): cad_seq10, 25, 26. Test (held out): cad_seq27, 39, 40, 41. Nothing was tuned on test; thresholds are the Sprint 4 defaults.
+- Scoring: Sprint 4 protocol unchanged. Smoothed queue length at the nearest per-second sample within 0.6 s of each annotated frame, frames from 5 s on.
+- Clip bootstrap (`ai_engine/evaluation/bootstrap.py`): clips of the split resampled with replacement, pooled MAE / bias / within +-1 over all frames of the drawn clips, 10,000 resamples, seed 20261116, 95 % percentile interval. It reuses the day-bootstrap machinery; `day_bootstrap.py` and its seed (20261113) are untouched.
+- Paired version: both configurations use the same drawn clips; the interval is of (new - current). Frames are aligned on (clip, time); unaligned frames are dropped and counted, and the count was 0 in every comparison (val, test, all; B, C, D).
+- Per-frame bootstrap: every frame its own cluster. It ignores within-clip correlation, is labelled "optimistic (ignores within-clip correlation)", and decides nothing.
+- Candidates ran every clip with the same camera configs, imgsz 640, stride 1, MPS, one model job at a time. The BoT-SORT YAML is resolved like ByteTrack's: `new_track_thresh`, `track_buffer` (from seconds) and the input confidence are identical, so only the algorithm differs (shared keys equal, checked by a test).
+- Real time (criterion c): `scripts/benchmark.py` on cad_seq27 (full clip, 1804 frames, clip 30.0 fps), one run per configuration. Benchmark excludes drawing and video writing.
+
+### Sample sizes
+
+| Set | Clips | Labelled frames scored |
+|---|---|---|
+| val (cad_seq10, 25, 26) | 3 | 122 |
+| test (cad_seq27, 39, 40, 41) | 4 | 285 |
+| all CAD | 7 | 407 |
+| MOT17-04, MOT17-09 | 2 | tracking only, no queue labels |
+
+`datasets/splits/test.txt` also lists mot17_04 and mot17_09. They have no queue labels, are not in the replayed clip set, and are excluded from every queue metric.
+
+### Headline with intervals (default A: YOLO11n + ByteTrack; source `outputs/s9_eval/intervals_default.json`)
+
+| Split | Frames | MAE [95 % clip bootstrap] | bias [95 %] | within +-1 [95 %] |
+|---|---|---|---|---|
+| val (3 clips) | 122 | 1.176 [0.989, 1.305] | +0.676 [-0.053, 1.250] | 0.730 [0.625, 0.787] |
+| test (4 clips) | 285 | 1.619 [0.968, 2.026] | +0.960 [-0.426, 1.372] | 0.537 [0.432, 0.753] |
+| all (7 clips) | 407 | 1.486 [1.034, 1.782] | +0.875 [0.083, 1.284] | 0.595 [0.482, 0.754] |
+
+Per-frame bootstrap (optimistic, ignores within-clip correlation), test MAE: 1.619 [1.477, 1.768]; val 1.176 [1.012, 1.344]; all 1.486 [1.370, 1.604]. It is much narrower than the clip interval and should not be used for claims. The test bias interval includes 0, so the over-counting on the test clips is not distinguishable from no bias at this sample size.
+
+### Error attribution at IoU 0.5 and 0.3 (default A, from 5 s, mean per frame; source `attribution_default.json`)
+
+Queue-length MAE compares counts and does not use IoU; the attribution does. The default threshold of every metric is unchanged; the table shows both side by side. The bias column of the attribution is the raw (unsmoothed) count's bias, so it differs from the smoothed +0.960.
+
+| Split | IoU | tp | fp_unmatched | of which overlaps a labelled person | counted_not_visible | fn_no_detection | fn_candidate_dwell | FP total | FN total |
+|---|---|---|---|---|---|---|---|---|---|
+| val | 0.5 | 3.861 | 1.549 | 1.500 | 0.795 | 1.262 | 0.500 | 2.377 | 1.762 |
+| val | 0.3 | 4.967 | 0.434 | 0.385 | 0.795 | 0.123 | 0.533 | 1.271 | 0.656 |
+| test | 0.5 | 5.354 | 2.330 | 1.621 | 1.319 | 1.821 | 0.881 | 3.691 | 2.709 |
+| test | 0.3 | 6.526 | 1.151 | 0.442 | 1.319 | 0.246 | 1.267 | 2.519 | 1.537 |
+
+Reading: moving from IoU 0.5 to 0.3 turns most of the unmatched detections that overlap a labelled person, and most of "no detection" misses, into matches (test: fn_no_detection 1.82 to 0.25; overlapping fp 1.62 to 0.44). Much of the error at 0.5 is box-localisation mismatch (labels and detections disagree on box extent), not missed or invented people. What remains at 0.3 on test is people counted but not visible in the label (1.32), unmatched detections with no labelled person near them (0.71) and dwell-candidate misses (1.27).
+
+### Comparison and adoption decisions (rule: evaluation_protocol.md v1; source `outputs/s9_eval/comparisons.json`)
+
+Paired difference on test (new - A), 4 clips, clip bootstrap:
+
+| Candidate | test MAE [95 %] | delta MAE vs A [paired 95 %] | half-width | (a) test improvement beyond half-width | (b) val MAE vs A (1.176) | (c) fps on cad_seq27 (>= 30.0) | Decision |
+|---|---|---|---|---|---|---|---|
+| B: YOLO11s + ByteTrack | 1.396 [1.082, 1.841] | -0.223 [-0.403, 0.216] | 0.309 | FAIL (0.223 < 0.309) | pass (0.844) | FAIL (20.53) | not adopted |
+| C: YOLO11n + BoT-SORT | 2.395 [0.925, 3.107] | +0.775 [-0.043, 1.172] | 0.607 | FAIL (worse) | pass (1.098) | FAIL (25.22) | not adopted |
+| D: YOLO11n + BoT-SORT + ReID | 2.488 [1.075, 3.172] | +0.868 [0.048, 1.315] | 0.634 | FAIL (worse) | pass (1.160) | FAIL (17.96) | not adopted |
+
+Other measurements (reported, never deciding):
+
+| Config | val MAE | test bias | test within +-1 | processing fps | peak RSS MB |
+|---|---|---|---|---|---|
+| A | 1.176 | +0.960 | 0.537 | 31.94 | 400.6 |
+| B | 0.844 | +0.365 | 0.639 | 20.53 | 519.1 |
+| C | 1.098 | +1.893 | 0.326 | 25.22 | 502.5 |
+| D | 1.160 | +2.116 | 0.323 | 17.96 | 512.7 |
+
+MOT17 tracking (IoU 0.5, `ai_engine.evaluate_tracking` as in Sprint 5; IDF1 / MOTA / ID switches):
+
+| Config | MOT17-04 | MOT17-09 |
+|---|---|---|
+| A | 0.4119 / 0.3127 / 47 | 0.5082 / 0.5200 / 68 |
+| B | 0.4078 / 0.2896 / 40 | 0.5745 / 0.5831 / 47 |
+| C | 0.4376 / 0.3222 / 39 | 0.4993 / 0.5345 / 70 |
+| D | 0.4424 / 0.3220 / 47 | 0.5329 / 0.5215 / 91 |
+
+Queue joins (`queue_join` events) and stitching links per clip, from each run's metrics JSON (joins / links; labelled peak queue count in the second column). CAD labels carry no person ids and Sprint 5/6 did not report joins per labelled person, so the labelled peak count is only a proxy denominator:
+
+| Clip | labelled peak | A | B | C | D |
+|---|---|---|---|---|---|
+| cad_seq10 | 6 | 6 / 12 | 6 / 4 | 6 / 12 | 7 / 12 |
+| cad_seq25 | 6 | 11 / 19 | 6 / 16 | 12 / 18 | 10 / 17 |
+| cad_seq26 | 8 | 12 / 12 | 10 / 7 | 12 / 12 | 10 / 22 |
+| cad_seq27 | 11 | 41 / 108 | 31 / 98 | 32 / 37 | 28 / 58 |
+| cad_seq39 | 7 | 13 / 28 | 10 / 25 | 9 / 26 | 9 / 29 |
+| cad_seq40 | 10 | 10 / 20 | 12 / 22 | 11 / 22 | 11 / 22 |
+| cad_seq41 | 11 | 13 / 19 | 15 / 18 | 15 / 17 | 14 / 22 |
+
+A's joins and links come from the Sprint 5 run (older code); B, C and D from current code. Queue MAE is unaffected, because all four are replayed through the same current `replay_queue`.
+
+Attribution of the candidates on test, per frame (raw count, FP total / FN total at IoU 0.5 and 0.3): A 9.05, 3.69/2.71 and 2.52/1.54; B 8.45, 3.02/2.63 and 1.97/1.58; C 9.94, 4.24/2.36 and 2.98/1.11; D 10.14, 4.48/2.41 and 3.12/1.05.
+
+What the comparison shows:
+
+- B (YOLO11s) has the lowest point MAE on test (1.396 against 1.619), but the paired interval [-0.403, 0.216] includes 0 and the improvement (0.223) is below the half-width (0.309). It is also too slow: 20.5 fps against 30.0 needed.
+- BoT-SORT (C, D) raises the raw count on test (more unmatched detections) and the test MAE (+0.775, +0.868); only D's interval excludes 0, and on the worse side. BoT-SORT cuts stitching links sharply on cad_seq27 (108 to 37 and 58) but that does not give better counts.
+- Neither BoT-SORT variant is real time on this clip (25.2 and 18.0 fps).
+- On MOT17, B improves MOT17-09 (IDF1 0.5745, ID switches 47 against 68); C and D change IDF1 modestly; D has more ID switches on MOT17-09 (91 against 68). MOT17 results are reported, not used in the rule.
+
+### GMC and ReID cost (BoT-SORT, cad_seq27 first 150 frames, 140 measured, MPS, `scripts/benchmark.py`; `outputs/s9_eval/gmc/final/`)
+
+| Config | processing fps (runs) | tracking ms/frame |
+|---|---|---|
+| ByteTrack | 31.9 / 32.7 | 4.2 / 4.0 |
+| BoT-SORT, bundled `gmc_method` sparseOptFlow | 25.6 / 26.6 | 9.6 / 9.3 |
+| BoT-SORT, `gmc_method` none | 32.6 / 31.8 | 4.0 / 4.1 |
+| BoT-SORT sparseOptFlow + ReID (1 run) | 17.0 | 29.9 |
+
+Global motion compensation costs about 5.3 ms/frame (about 6 fps) on the M1; with it off BoT-SORT costs the same as ByteTrack. ReID adds about 20 ms of tracking on top. The ReID features are the detector's own 64-dimensional head slice, not a purpose-trained embedding, and need a PyTorch `.pt` detector (see the report's CoreML note). The `gmc_method` option is exposed on `scripts/benchmark.py` only; defaults stay as bundled.
+
+### Limits
+
+- Few clips: 3 val and 4 test clips give wide intervals (test MAE 0.97 to 2.03; test bias interval includes 0). The paired half-widths (0.31 to 0.63) are larger than most of the differences measured.
+- A single benchmark run per configuration for criterion (c). The current default passes real time only narrowly (31.94 fps against 30.0 for the clip); any load on the machine could flip it. The separate GMC runs (31.9 and 32.7 fps for ByteTrack on 150 frames) show a run-to-run spread of about 1 fps.
+- Queue joins per labelled person is a proxy (raw joins and links next to the labelled peak count), because the CAD labels carry no person ids.
+- mot17_04 and mot17_09 are listed in `datasets/splits/test.txt` but have no queue labels and are excluded from queue metrics; the "4 test clips" are the CAD clips only.
+- Scoring only annotated frames from 5 s, on 7 clips of one public dataset (CAD), not on a bank branch.
+- The benchmark has no drawing or video writing, so the processing fps of the full `run_tracking` run is lower.
+- The per-frame bootstrap is optimistic and not a basis for decisions.
+
+### What this supports and does not support
+
+Supports:
+- The default queue-length error on held-out clips is about 1.6 people, with an honest 95 % interval of roughly 1.0 to 2.0 on 4 clips.
+- Under the committed rule, YOLO11s and BoT-SORT (with or without ReID) are not better than YOLO11n + ByteTrack on this data in a way that survives the noise, and none of them runs in real time at the default settings on this machine.
+- Much of the error at IoU 0.5 is localisation mismatch rather than missing or invented people.
+
+Does not support:
+- A claim that YOLO11s is worse (its point MAE is lower; the rule was simply not met on accuracy beyond noise and on speed) or that BoT-SORT never helps (it reduces stitching links and helps ID switches on some MOT17 clips).
+- Any claim about waiting-time accuracy, or about performance on queue footage other than the CAD clips.
+- Any claim at a finer level than the intervals allow; differences under about 0.3 to 0.6 people cannot be resolved with 4 clips.
 
 ## Predictor accuracy on real call-centre queues (Anonymous Bank, 1999; protocol v1 + post-hoc v2 addendum)
 
