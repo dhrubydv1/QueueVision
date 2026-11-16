@@ -262,9 +262,9 @@ def make_figures(result, frames, figs: Path) -> None:
     # 8 post hoc S1 vs headline predictor
     s1t = result["post_hoc_sensitivity"]["S1_all_service_starts"]["test"]["methods"]["predictor"]
     fig, ax = plt.subplots(figsize=(5.5, 4))
-    for i, (lab, v) in enumerate([("v1 predictor", t["methods"]["predictor"]["mae_s"]),
-                                  ("S1 predictor (post hoc)", s1t["mae_s"]),
-                                  ("Regression", t["methods"]["regression"]["mae_s"])]):
+    for i, v in enumerate([t["methods"]["predictor"]["mae_s"],
+                                  s1t["mae_s"],
+                                  t["methods"]["regression"]["mae_s"]]):
         ax.bar(i, v["value"], yerr=[[v["value"] - v["lo"]], [v["hi"] - v["value"]]], capsize=4,
                color=["#1f77b4", "#aec7e8", "#9467bd"][i])
     ax.set_xticks(range(3), ["v1 predictor", "S1 predictor\n(post hoc)", "Regression"])
