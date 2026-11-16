@@ -124,6 +124,7 @@ def run_variants(
     annotation_dir: Path,
     splits: dict[str, list[str]],
     stitch_diagnostics_dir: Path | None = None,
+    frame_errors: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     cameras: dict[str, CameraConfig] = {c: load_camera_config(camera_dir / f"{c}.yaml") for c in clips}
     tracks = {c: read_mot_tracks(tracks_dir / f"{c}_mot.txt") for c in clips}
@@ -150,6 +151,11 @@ def run_variants(
                     replay.stitch_decisions,
                 )
             scores[clip] = score_clip(replay, annotation_dir / f"{clip}_queue_counts.csv")
+            if frame_errors is not None:
+                frame_errors.setdefault(variant["name"], {})[clip] = {
+                    key: [[e.time_s, e.error, e.rounded_error] for e in errs]
+                    for key, errs in scores[clip].errors.items()
+                }
             counts: dict[str, int] = {}
             for event in replay.events:
                 counts[event.event_type] = counts.get(event.event_type, 0) + 1
@@ -185,6 +191,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--splits-dir", type=Path, help="Folder with val.txt and test.txt")
     parser.add_argument("--output", type=Path, help="JSON report path")
     parser.add_argument(
+        "--frame-errors-output",
+        type=Path,
+        help="Side file with per-frame errors [time_s, error, rounded_error] per variant/clip/series "
+        "(input for scripts/evaluate_queue_intervals.py); --output is unchanged",
+    )
+    parser.add_argument(
         "--stitch-diagnostics-dir",
         type=Path,
         help="Write <dir>/<variant>/<clip>_stitch_diagnostics.jsonl (guarded stitching only)",
@@ -199,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
                 splits[split] = members
             else:
                 print(f"note: no clips for split '{split}' in {args.splits_dir}", file=sys.stderr)
+    frame_errors: dict[str, Any] | None = {} if args.frame_errors_output else None
     try:
         variants = load_variants(args.variants)
         results = run_variants(
@@ -210,11 +223,18 @@ def main(argv: list[str] | None = None) -> int:
             args.annotation_dir,
             splits,
             args.stitch_diagnostics_dir,
+            frame_errors,
         )
     except (OSError, ValueError, CameraConfigError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
 
+    if frame_errors is not None:
+        args.frame_errors_output.parent.mkdir(parents=True, exist_ok=True)
+        args.frame_errors_output.write_text(
+            json.dumps({"clips": args.clips, "tolerance_seconds": 0.6, "variants": frame_errors}),
+            encoding="utf-8",
+        )
     groups = ["all_clips", *splits]
     print(format_table(results, groups))
     if args.output:
