@@ -85,21 +85,21 @@ dependency).
 ## Baselines vs final
 
 Baselines from Task 1 (`.superpowers/sdd/2026-11-16-fix-evaluation/task-1-report.md`, on `3099a83`); final
-from the commands run at the end of this session on the final tree.
+from the commands re-run on the final tree; raw outputs saved in `outputs/s9_eval/final_commands/` (local, gitignored: `pytest.txt`, `pytest_not_integration.txt`, `ruff_*.txt`, `dashboard_*.txt`, `e2e.txt`).
 
 | Command | Baseline | Final |
 |---|---|---|
 | `.venv/bin/python -m pytest -q` | 514 passed | 542 passed |
 | `.venv/bin/python -m pytest -q -m "not integration"` | 503 passed, 11 deselected | 531 passed, 11 deselected |
 | `.venv/bin/ruff check .` | All checks passed | All checks passed |
-| `.venv/bin/ruff format --check .` | 155 files already formatted | 161 files already formatted |
+| `.venv/bin/ruff format --check .` | 155 files already formatted | 162 files already formatted (161 in the first run at the end of the session; the count differs by one, cause not investigated, ruff check and format --check both pass) |
 | dashboard `npm run lint` | clean | clean |
 | dashboard `npm run typecheck` | clean | clean |
 | dashboard `npm test` (Vitest) | 135 passed | 140 passed (18 files) |
 | dashboard `npm run build` | success | success |
 | dashboard `npm run e2e` (chromium + webkit) | 14 passed | 14 passed (4.1 m) |
 
-New tests: 28 Python (514 to 542; bootstrap, tracker, comparison driver and export tests) and 5 Vitest (135 to 140). The e2e suite uses port 8765 only (`dashboard/e2e/server.ts`), never 8000, 8001 or 8770.
+Net change in tests: Python 514 to 542, Vitest 135 to 140 (not a per-file count). The e2e suite uses port 8765 only (`dashboard/e2e/server.ts`), never 8000, 8001 or 8770.
 
 ## Measurements
 
@@ -134,11 +134,13 @@ percentile 95 %; paired for differences; per-frame bootstrap optimistic. Sources
 
 ## Notes for later sessions
 
-- **GMC cost.** BoT-SORT's bundled global motion compensation (`gmc_method: sparseOptFlow`) costs about 5.3
-  ms/frame (about 6 fps) on the M1: ByteTrack 31.9 / 32.7 fps, BoT-SORT 25.6 / 26.6, BoT-SORT with `gmc_method
-  none` 32.6 / 31.8 (cad_seq27, first 150 frames, `outputs/s9_eval/gmc/final/`). ReID adds about 20 ms more. A
-  later session that wants BoT-SORT in real time should start with GMC off (exposed only through
-  `scripts/benchmark.py --gmc-method`; not wired to `run_tracking`, and not evaluated for accuracy).
+- **GMC cost.** BoT-SORT's bundled global motion compensation (`gmc_method: sparseOptFlow`) costs about 5.4
+  ms/frame, about 6 fps (derived: mean of two runs each in `outputs/s9_eval/gmc/final/`; sparseOptFlow `run2`, `run6`
+  tracking 9.56 and 9.31 ms, mean 9.44, 25.55 and 26.61 fps, mean 26.1; `gmc_method` none `run3`, `run7` tracking 4.03
+  and 4.14 ms, mean 4.08, 32.61 and 31.76 fps, mean 32.2; differences 5.35 ms and 6.1 fps). ByteTrack (`run1`, `run5`)
+  is 31.86 and 32.73 fps, so the two-run spread is 0.87 fps (BoT-SORT 1.06); n = 2, indicative only. ReID adds about 20
+  ms more. A later session that wants BoT-SORT in real time should start with GMC off (exposed only through
+  `scripts/benchmark.py --gmc-method`; not wired to `run_tracking`; speed only, **not evaluated for accuracy**).
 - **ReID CoreML guard.** Ultralytics takes ReID features from the detector only for a PyTorch `.pt` model with a
   non-end2end Detect head. For a CoreML `.mlpackage` (or end2end) detector it silently switches to
   `yolo26n-cls.pt` (an extra download and a separate classifier). `--reid on` is therefore rejected with

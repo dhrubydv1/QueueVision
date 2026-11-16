@@ -116,12 +116,12 @@ What the comparison shows:
 | BoT-SORT, `gmc_method` none | 32.6 / 31.8 | 4.0 / 4.1 |
 | BoT-SORT sparseOptFlow + ReID (1 run) | 17.0 | 29.9 |
 
-Global motion compensation costs about 5.3 ms/frame (about 6 fps) on the M1; with it off BoT-SORT costs the same as ByteTrack. ReID adds about 20 ms of tracking on top. The ReID features are the detector's own 64-dimensional head slice, not a purpose-trained embedding, and need a PyTorch `.pt` detector (see the report's CoreML note). The `gmc_method` option is exposed on `scripts/benchmark.py` only; defaults stay as bundled.
+Global motion compensation costs about 5.4 ms/frame, about 6 fps, on the M1 (derived, not a separate measurement: mean of two runs each from `outputs/s9_eval/gmc/final/run2` and `run6` (sparseOptFlow) against `run3` and `run7` (`gmc_method` none); tracking ms 9.56 and 9.31, mean 9.44, against 4.03 and 4.14, mean 4.08, difference 5.35; processing fps 25.55 and 26.61, mean 26.1, against 32.61 and 31.76, mean 32.2, difference 6.1). With it off BoT-SORT costs the same as ByteTrack (tracking 4.08 ms against 4.17 and 4.01 in `run1` and `run5`). Whether BoT-SORT without GMC is as accurate was not evaluated: only its speed was measured. ReID adds about 20 ms of tracking on top. The ReID features are the detector's own 64-dimensional head slice, not a purpose-trained embedding, and need a PyTorch `.pt` detector (see the report's CoreML note). The `gmc_method` option is exposed on `scripts/benchmark.py` only; defaults stay as bundled.
 
 ### Limits
 
 - Few clips: 3 val and 4 test clips give wide intervals (test MAE 0.97 to 2.03; test bias interval includes 0). The paired half-widths (0.31 to 0.63) are larger than most of the differences measured.
-- A single benchmark run per configuration for criterion (c). The current default passes real time only narrowly (31.94 fps against 30.0 for the clip); any load on the machine could flip it. The separate GMC runs (31.9 and 32.7 fps for ByteTrack on 150 frames) show a run-to-run spread of about 1 fps.
+- A single benchmark run per configuration for criterion (c). The current default passes real time only narrowly (31.94 fps against 30.0 for the clip); any load on the machine could flip it. The separate GMC runs show how small two-run spreads are: derived from `gmc/final/run1` and `run5` (ByteTrack, 31.86 and 32.73 fps, difference 0.87) and `run2` and `run6` (BoT-SORT, 25.55 and 26.61, difference 1.06); n = 2 each, so this is an indication, not an estimate of the variance.
 - Queue joins per labelled person is a proxy (raw joins and links next to the labelled peak count), because the CAD labels carry no person ids.
 - mot17_04 and mot17_09 are listed in `datasets/splits/test.txt` but have no queue labels and are excluded from queue metrics; the "4 test clips" are the CAD clips only.
 - Scoring only annotated frames from 5 s, on 7 clips of one public dataset (CAD), not on a bank branch.
@@ -136,7 +136,7 @@ Supports:
 - Much of the error at IoU 0.5 is localisation mismatch rather than missing or invented people.
 
 Does not support:
-- A claim that YOLO11s is worse (its point MAE is lower; the rule was simply not met on accuracy beyond noise and on speed) or that BoT-SORT never helps (it reduces stitching links and helps ID switches on some MOT17 clips).
+- A claim that YOLO11s is worse (its point MAE is lower; the rule was simply not met on accuracy beyond noise and on speed) or that BoT-SORT never helps (it reduces stitching links, and C has fewer ID switches on MOT17-04, 39 against 47; on MOT17-09 C has 70 against 68 and D 91).
 - Any claim about waiting-time accuracy, or about performance on queue footage other than the CAD clips.
 - Any claim at a finer level than the intervals allow; differences under about 0.3 to 0.6 people cannot be resolved with 4 clips.
 
