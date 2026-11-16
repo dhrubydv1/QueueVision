@@ -117,6 +117,13 @@ class PersonTracker:
         base_config: dict[str, Any] | None = None,
     ) -> None:
         self.detector = detector
+        if settings is not None and settings.reid:
+            model_path = Path(getattr(detector, "model_path", ""))
+            if model_path.suffix.lower() != ".pt" or getattr(detector, "device", None) == "coreml":
+                raise ValueError(
+                    "reid with model 'auto' needs a PyTorch .pt detector (CoreML models make "
+                    f"Ultralytics download a separate classifier encoder); got {model_path}"
+                )
         self.settings = settings or TrackerSettings(new_track_confidence=detector.confidence)
         # Ultralytics' bytetrack.yaml unless given (tests pass a dict to stay model-free).
         self._base_config = (
@@ -176,12 +183,14 @@ class PersonTracker:
 
     def describe(self) -> dict[str, Any]:
         """Tracker settings for reports."""
-        return {
+        info = {
             "type": self.resolved_config.get("tracker_type", "bytetrack"),
             "input_confidence": self.settings.input_confidence,
             "new_track_confidence": self.settings.new_track_confidence,
             "buffer_seconds": self.settings.buffer_seconds,
-            "reid": bool(self.resolved_config.get("with_reid", False)),
             "effective_fps": round(self.effective_fps, 3),
             "resolved": self.resolved_config,
         }
+        if info["type"] == "botsort":  # ByteTrack's report block stays exactly as before
+            info["reid"] = bool(self.resolved_config.get("with_reid", False))
+        return info

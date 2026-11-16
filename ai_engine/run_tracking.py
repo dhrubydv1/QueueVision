@@ -45,7 +45,7 @@ import cv2
 import numpy as np
 
 from ai_engine import config
-from ai_engine.detection.detector import ModelLoadError, PersonDetector
+from ai_engine.detection.detector import ModelLoadError, PersonDetector, is_coreml_model, resolve_model_path
 from ai_engine.detection.types import PersonDetection
 from ai_engine.evaluation.mot_eval import MotWriter
 from ai_engine.frame_processor import FrameProcessor
@@ -433,7 +433,7 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         "--tracker-input-confidence",
         type=float,
         default=config.TRACKER_INPUT_CONFIDENCE,
-        help="Minimum score of detections passed into ByteTrack (default: %(default)s)",
+        help="Minimum score of detections passed into the tracker (default: %(default)s)",
     )
     parser.add_argument(
         "--track-buffer-seconds",
@@ -477,6 +477,8 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.reid == "on" and args.tracker != "botsort":
         parser.error("--reid on requires --tracker botsort")
+    if args.reid == "on" and is_coreml_model(resolve_model_path(args.model)):
+        parser.error("--reid on needs a PyTorch .pt model, not CoreML")
     return args
 
 
