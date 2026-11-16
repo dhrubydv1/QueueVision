@@ -103,8 +103,8 @@ def analyze(name: str) -> None:
          "datasets/splits", "--output", str(out / "errors_640.json")], out / "errors_640.txt")  # fmt: skip
     run([PY, "scripts/summarize_attribution.py", "--errors", str(out / "errors_640.json"), "--output",
          str(out / "attribution.json")])  # fmt: skip
-    default_fe = str(OUT / "frame_errors_default.json")
-    own_fe = default_fe if name == "A" else str(out / "frame_errors.json")
+    default_fe = str(OUT / "A" / "frame_errors.json")  # A as analysed by this driver (run `analyze A` first)
+    own_fe = str(out / "frame_errors.json")
     run(
         [
             PY,
@@ -131,11 +131,12 @@ def analyze(name: str) -> None:
     # joins and stitching links come from the per-clip run metrics (live pipeline with the shipped configs)
     joins = {}
     for clip in CAD + MOT:
-        queue = clip_metrics(name, clip)["queue"]
+        metrics = clip_metrics(name, clip)
+        queue = metrics["queue"]
         entry = {
             "queue_join": queue["event_counts"]["queue_join"],
             "stitching_links": queue["stitching"]["stitches"],
-            "tracker": clip_metrics(name, clip)["configuration"]["tracker"],
+            "tracker": metrics["configuration"]["tracker"],
         }
         if clip.startswith("cad"):
             entry["labelled_peak_queue_count"] = labelled_peak(clip)
@@ -171,6 +172,12 @@ def mot_metrics(name: str) -> dict:
     return result
 
 
+def own_test_mae_interval(out: Path) -> list[float]:
+    """A configuration's own test-split MAE clip-bootstrap interval (never the reference's)."""
+    mae = load(out / "intervals.json")["splits"]["test"]["clip_bootstrap"]["mae"]
+    return [mae["low"], mae["high"]]
+
+
 def decide() -> None:
     a_queue = load(OUT / "A" / "queue_640.json")["variants"]["as_configured"]
     rows: list[dict] = []
@@ -194,7 +201,7 @@ def decide() -> None:
             "mot17": mot_metrics(name),
             "joins_links": load(out / "joins_links.json"),
             "attribution": load(out / "attribution.json"),
-            "sources": {"queue": str(out / "queue_640.json"), "attribution": str(out / "attribution.json")},
+            "sources": {"queue": str(out / "queue_640.json"), "attribution": str(out / "attribution.json"), "intervals": str(out / "intervals.json"), "paired_vs_A": str(out / "intervals_vs_A.json"), "mot17": [str(out / f"{c}_tracking_eval.json") for c in MOT], "joins_links": str(out / "joins_links.json"), "benchmark": str(out / f"benchmark_{BENCH_CLIP}.json")},
         }  # fmt: skip
         if name == "A":
             entry["intervals"] = load(out / "intervals.json")["splits"]
@@ -209,7 +216,8 @@ def decide() -> None:
                 raise SystemExit(f"{name}: unaligned frames dropped {dropped}; stop and report")
             half = crit["paired_half_width"]
             delta = crit["delta_mae_new_minus_current"]
-            val_new, val_a = splits["val"]["mae"], a_queue["pooled"]["val"]["smoothed_from5s"]["mae"]
+            val_new = entry["intervals"]["val"]["clip_bootstrap"]["mae"]["point"]  # unrounded
+            val_a = load(OUT / "A" / "intervals.json")["splits"]["val"]["clip_bootstrap"]["mae"]["point"]
             a_ok = crit["improvement_beyond_half_width"]
             b_ok = val_new <= val_a
             c_ok = fps >= clip_fps
@@ -233,10 +241,10 @@ def decide() -> None:
                     "configuration": name,
                     "metric": "test smoothed queue-length MAE (from 5 s)",
                     "value": splits["test"]["mae"],
-                    "interval_clip_bootstrap_95": [test["clip_bootstrap"]["mae"]["low"], test["clip_bootstrap"]["mae"]["high"]],
+                    "interval_clip_bootstrap_95": own_test_mae_interval(out),
                     "paired_delta_vs_A": delta,
                     "decision": entry["decision"],
-                    "source": [str(out / "intervals_vs_A.json"), str(out / "queue_640.json"), str(out / f"benchmark_{BENCH_CLIP}.json")],
+                    "source": [str(out / "intervals.json"), str(out / "intervals_vs_A.json"), str(out / "queue_640.json"), str(out / f"benchmark_{BENCH_CLIP}.json")],
                 }
             )  # fmt: skip
         summary[name] = entry
@@ -245,7 +253,7 @@ def decide() -> None:
         "protocol": PROTOCOL,
         "series": "smoothed queue length, annotated frames from 5 s, nearest sample within 0.6 s",
         "bootstrap": "clip-level, 10,000 resamples, seed 20261116, 95 % percentile (paired: same clips drawn for both)",
-        "notes": [TEST_FILE_NOTE, "adoption_criterion_a is read from the test split only.", "joins_per_labelled_peak_person = queue_join events / peak labelled queue_count (the CAD labels carry no person ids, so this is a proxy)."],
+        "notes": [TEST_FILE_NOTE, "adoption_criterion_a is read from the test split only.", "A joins/links come from the Sprint 5 run metrics (older code); B/C/D from current code. They never decide anything; queue MAE is unaffected because all four are replayed through the same current replay_queue.", "joins_per_labelled_peak_person = queue_join events / peak labelled queue_count (the CAD labels carry no person ids, so this is a proxy)."],
         "rows": rows,
         "configurations": summary,
     }  # fmt: skip
