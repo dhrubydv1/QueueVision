@@ -81,6 +81,65 @@ export interface WaitingTimeSection {
   pooled: Record<string, unknown> | null;
 }
 
+/** A metric with its 95 % day-level bootstrap interval, as written by the scoring script. */
+export interface Interval {
+  value: number;
+  lo: number;
+  hi: number;
+}
+
+export type CallCentreMethodKey = "predictor" | "les" | "recent_mean" | "regression";
+
+export interface CallCentreMethod {
+  n_agent: number;
+  n_covered: number;
+  coverage: Interval;
+  mae_s: Interval;
+  rmse_s: Interval;
+  median_abs_error_s: Interval;
+  bias_s: Interval;
+  within_30s: Interval;
+  within_60s: Interval;
+  /** Predictor only: share of actual waits inside the predicted low-high range. */
+  range_coverage?: Interval;
+}
+
+export interface CallCentreHang {
+  n_hang: number;
+  n_hang_with_prediction: number;
+  n_hung_up_after_longer_than_predicted: number;
+}
+
+/** Post-hoc sensitivity S1 ("all service starts", protocol v2): never the headline. */
+export interface CallCentrePostHocS1 {
+  post_hoc: true;
+  protocol_version: number;
+  definition: string;
+  n_days: number;
+  n_calls: number;
+  methods: Record<CallCentreMethodKey, CallCentreMethod>;
+  paired_mae_difference: Record<string, { n_common: number; mae_diff_s: Interval }>;
+  hang: CallCentreHang;
+}
+
+/** Predictor accuracy on real call-centre queues ("Anonymous Bank" logs); test months, primary queue. */
+export interface PredictorOnCallCentreLogs {
+  source: string;
+  citation: string;
+  caveat: string;
+  protocol_version: number;
+  interval: string;
+  seed: number;
+  queue: string;
+  split: string;
+  n_days: number;
+  n_calls: number;
+  methods: Record<CallCentreMethodKey, CallCentreMethod>;
+  paired_mae_difference: Record<string, { n_common: number; mae_diff_s: Interval }>;
+  hang: CallCentreHang;
+  post_hoc_s1: CallCentrePostHocS1;
+}
+
 export interface AccuracyData {
   schema: "accuracy-1";
   generated_at: string;
@@ -89,5 +148,7 @@ export interface AccuracyData {
   count_errors: CountErrorsSection | null;
   changes_not_adopted: ChangeNotAdopted[] | null;
   waiting_time: WaitingTimeSection | null;
+  /** Absent in files exported before this section existed. */
+  predictor_on_call_centre_logs?: PredictorOnCallCentreLogs | null;
   limits: string[];
 }
