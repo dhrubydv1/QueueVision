@@ -26,6 +26,7 @@ import numpy as np  # noqa: E402
 from ai_engine.data.anonymous_bank import parse_month  # noqa: E402
 from ai_engine.data.anonymous_bank_replay import (  # noqa: E402
     QUEUE_DEFINITIONS,
+    all_service_starts_by_day,
     carried_over_count,
     group_by_day,
     regression_fit,
@@ -133,6 +134,23 @@ def main() -> None:
         "windows_s": expl,
     }
 
+    # Post hoc S1 (protocol v2 addendum): service events = every AGENT ser_start of the types.
+    s1_preds = split_preds(replay_queue(
+        queues["primary"], all_service_starts=all_service_starts_by_day(kept, "primary")))
+    s1 = {}
+    for split in ("validation", "test"):
+        fr1 = Frame(s1_preds[split], reg)
+        frames[("S1", split)] = fr1
+        s1[split] = {"n_days": fr1.n_days, "methods": {m: method_metrics(fr1, m) for m in METHODS},
+                     "hang": hang_report(fr1), "paired_mae_difference": paired_vs_baselines(fr1)}
+    result["post_hoc_sensitivity"] = {"S1_all_service_starts": {
+        "protocol_version": 2, "post_hoc": True,
+        "definition": "Primary queue; service events = ser_start of every AGENT call of the primary "
+                      "types with ser_start set, queued or not, strictly before t. Everything else "
+                      "as version 1 (baselines identical). Chosen after the v1 results were seen; "
+                      "never replaces the v1 headline.",
+        **s1}}
+
     # Little's law, primary queue, all months.
     by_day = group_by_day(queues["primary"])
     result["littles_law_primary_all_months"] = {
@@ -239,6 +257,21 @@ def make_figures(result, frames, figs: Path) -> None:
     ax.legend()
     fig.tight_layout()
     fig.savefig(figs / "littles_law.png", dpi=130)
+    plt.close(fig)
+
+    # 8 post hoc S1 vs headline predictor
+    s1t = result["post_hoc_sensitivity"]["S1_all_service_starts"]["test"]["methods"]["predictor"]
+    fig, ax = plt.subplots(figsize=(5.5, 4))
+    for i, (lab, v) in enumerate([("v1 predictor", t["methods"]["predictor"]["mae_s"]),
+                                  ("S1 predictor (post hoc)", s1t["mae_s"]),
+                                  ("Regression", t["methods"]["regression"]["mae_s"])]):
+        ax.bar(i, v["value"], yerr=[[v["value"] - v["lo"]], [v["hi"] - v["value"]]], capsize=4,
+               color=["#1f77b4", "#aec7e8", "#9467bd"][i])
+    ax.set_xticks(range(3), ["v1 predictor", "S1 predictor\n(post hoc)", "Regression"])
+    ax.set_ylabel("MAE on test months (s)")
+    ax.set_title("Post-hoc S1 next to the v1 headline")
+    fig.tight_layout()
+    fig.savefig(figs / "post_hoc_s1_mae_test.png", dpi=130)
     plt.close(fig)
 
     # 7 exploration windows
