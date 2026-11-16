@@ -89,18 +89,39 @@ def queue_lengths(ordered: list[CallRecord]) -> list[int]:
     return out
 
 
-def replay_day(calls: list[CallRecord], settings: ServiceRateSettings | None = None) -> list[Prediction]:
-    """Replay one date of one queue; returns a Prediction per call (HANG included)."""
+def replay_day(
+    calls: list[CallRecord],
+    settings: ServiceRateSettings | None = None,
+    service_starts: list[int] | None = None,
+) -> list[Prediction]:
+    """Replay one date of one queue; returns a Prediction per call (HANG included).
+
+    ``service_starts`` overrides the service events (post-hoc sensitivity S1 passes the
+    ``ser_start`` of every AGENT call of the queue's types, queued or not). Default (protocol
+    v1): ``ser_start`` of the queue's own queued AGENT calls.
+
+    Deliberate difference from ``QueueAnalyzer.update``: it adds the service starts of a frame
+    *before* calling ``estimate`` for that frame; here only services strictly before t count.
+    """
     if not calls:
         return []
     settings = settings or ServiceRateSettings()
     ordered = sorted(calls, key=order_key)
     qlens = queue_lengths(ordered)
-    services = sorted(c.ser_start_ts for c in ordered if c.outcome == "AGENT" and c.ser_start_ts is not None)
+    if service_starts is None:
+        service_starts = [
+            c.ser_start_ts for c in ordered if c.outcome == "AGENT" and c.ser_start_ts is not None
+        ]
+    services = sorted(service_starts)
+    # HANG ser_start is an estimate() time (as the protocol lists) but never a service event.
+    hang_service_times = {
+        c.ser_start_ts for c in ordered if c.outcome == "HANG" and c.ser_start_ts is not None
+    }
     agent_exits = sorted(
         ((c.q_exit_ts, order_key(c), c.q_exit_ts - c.q_start_ts) for c in ordered if c.outcome == "AGENT"),
     )
-    times = {c.q_start_ts for c in ordered} | {c.q_exit_ts for c in ordered} | set(services)
+    times = {c.q_start_ts for c in ordered} | {c.q_exit_ts for c in ordered}
+    times |= set(services) | hang_service_times
     by_start: dict[int, list[int]] = defaultdict(list)
     for i, c in enumerate(ordered):
         by_start[c.q_start_ts].append(i)
@@ -135,12 +156,27 @@ def replay_day(calls: list[CallRecord], settings: ServiceRateSettings | None = N
 
 
 def replay_queue(
-    calls: Iterable[CallRecord], settings: ServiceRateSettings | None = None
+    calls: Iterable[CallRecord],
+    settings: ServiceRateSettings | None = None,
+    all_service_starts: dict[object, list[int]] | None = None,
 ) -> list[Prediction]:
     out: list[Prediction] = []
-    for _, day in group_by_day(calls).items():
-        out.extend(replay_day(day, settings))
+    for date, day in group_by_day(calls).items():
+        starts = None if all_service_starts is None else all_service_starts.get(date, [])
+        out.extend(replay_day(day, settings, starts))
     return out
+
+
+def all_service_starts_by_day(
+    records: Iterable[CallRecord], definition: str = "primary"
+) -> dict[object, list[int]]:
+    """Post-hoc S1: ser_start of every AGENT call of the queue's types, queued or not."""
+    types = QUEUE_DEFINITIONS[definition]
+    out: dict[object, list[int]] = defaultdict(list)
+    for r in records:
+        if r.outcome == "AGENT" and r.ser_start_ts is not None and (types is None or r.type in types):
+            out[r.date].append(r.ser_start_ts)
+    return dict(out)
 
 
 def regression_fit(preds: Iterable[Prediction]) -> tuple[float, float]:

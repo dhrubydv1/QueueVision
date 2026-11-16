@@ -37,39 +37,89 @@ def synthetic():
     return cs
 
 
-def test_matches_engine_sequence_like_queue_analyzer():
+def test_adapter_self_consistent_with_direct_engine_calls():
+    """Self-consistency of the adapter against direct calls of the engine's functions.
+
+    This does NOT run ``QueueAnalyzer`` (it needs detections and a camera config). It mirrors the
+    analyzer's estimator usage (``add_service`` then ``estimate`` then ``predict_wait``) with
+    the one deliberate difference tested in ``test_deliberate_difference_from_queue_analyzer``:
+    the analyzer adds same-frame service starts before ``estimate``; the protocol counts only
+    services strictly before t.
+    """
     cs = synthetic()
     preds = by_key(replay_day(cs))
-    # Independent mirror of QueueAnalyzer: add services (strictly before), estimate, predict.
     services = sorted(c.ser_start_ts for c in cs if c.outcome == "AGENT")
-    times = sorted({c.q_start_ts for c in cs} | {c.q_exit_ts for c in cs} | set(services))
+    times = sorted({c.q_start_ts for c in cs} | {c.q_exit_ts for c in cs} | set(services)
+                   | {c.ser_start_ts for c in cs if c.outcome == "HANG"})
     ordered = sorted(cs, key=lambda c: (c.q_start_ts, c.vru_entry_ts, c.call_key))
+    est = ServiceRateEstimator(ServiceRateSettings(), start_s=0.0)
+    added = 0
     n_ok = 0
     for T in times:
-        est2 = ServiceRateEstimator(ServiceRateSettings(), start_s=0.0)  # replayed from scratch
-        for tt in times:
-            if tt > T:
-                break
-            for s in [x for x in services if tt_prev(times, tt) <= x < tt]:
-                est2.add_service(float(s))
-            rate = est2.estimate(float(tt))
+        while added < len(services) and services[added] < T:  # strictly before T
+            est.add_service(float(services[added]))
+            added += 1
+        rate = est.estimate(float(T))
         for c in ordered:
-            if c.q_start_ts == T:
-                ck = (c.q_start_ts, c.vru_entry_ts, c.call_key)
-                ql = sum(1 for o in ordered if o is not c and o.q_exit_ts > T
-                         and (o.q_start_ts, o.vru_entry_ts, o.call_key) < ck)
-                exp = predict_wait(ql, rate)
-                got = preds[c.call_key]
-                assert got.queue_length == ql
-                assert got.pred == exp.predicted_wait_s
-                assert got.low == exp.low_s and got.high == exp.high_s
-                n_ok += exp.status == "ok"
+            if c.q_start_ts != T:
+                continue
+            ck = (c.q_start_ts, c.vru_entry_ts, c.call_key)
+            ql = sum(1 for o in ordered if o is not c and o.q_exit_ts > T
+                     and (o.q_start_ts, o.vru_entry_ts, o.call_key) < ck)
+            exp = predict_wait(ql, rate)
+            got = preds[c.call_key]
+            assert got.queue_length == ql
+            assert got.pred == exp.predicted_wait_s
+            assert got.low == exp.low_s and got.high == exp.high_s
+            n_ok += exp.status == "ok"
     assert n_ok > 5
 
 
-def tt_prev(times, tt):
-    i = times.index(tt)
-    return -1 if i == 0 else times[i - 1]
+def test_deliberate_difference_from_queue_analyzer():
+    # QueueAnalyzer-style: service start at T is added BEFORE estimate(T), so it counts at T.
+    # Protocol: a service at exactly t does not count for the prediction at t.
+    starts = [30, 50, 100]
+    probe = call("p", 100, 400)
+    cs = [call(f"s{i}", 1 + i, 500 + i, ss=s) for i, s in enumerate(starts)]
+    got = by_key(replay_day([*cs, probe]))["p"]
+    analyzer_style = ServiceRateEstimator(ServiceRateSettings(), 0.0)
+    for s in starts:
+        analyzer_style.add_service(float(s))
+    protocol_style = ServiceRateEstimator(ServiceRateSettings(), 0.0)
+    for s in starts[:2]:
+        protocol_style.add_service(float(s))
+    ql = got.queue_length
+    assert got.pred == predict_wait(ql, protocol_style.estimate(100.0)).predicted_wait_s
+    assert got.pred != predict_wait(ql, analyzer_style.estimate(100.0)).predicted_wait_s
+
+
+def test_hang_service_time_is_an_estimate_time_but_never_a_service():
+    base = [call(f"s{i}", 10 * i + 1, 400 + i, ss=20 + 10 * i) for i in range(6)]
+    probe = call("p", 200, 900)
+    plain = by_key(replay_day([*base, probe]))["p"]
+    with_hang = by_key(replay_day([*base, probe, call("h", 150, 800, ss=190, out="HANG")]))["p"]
+    # same rate (pred / queue length), so no service was added by the HANG call
+    assert abs(with_hang.pred / with_hang.queue_length - plain.pred / plain.queue_length) < 1e-9
+    assert with_hang.queue_length == plain.queue_length + 1  # but it is in the queue
+
+
+def test_all_service_starts_s1_counts_unqueued_agents():
+    from ai_engine.data.anonymous_bank_replay import all_service_starts_by_day
+
+    queued = [call(f"s{i}", 10 * i + 1, 400, ss=20 + 20 * i) for i in range(3)]
+    unq = [call(f"u{i}", 0, 0, ss=25 + 20 * i, queued=False) for i in range(3)]
+    other = call("x", 0, 0, ss=30, typ="IN", queued=False)
+    probe = call("p", 100, 900)
+    starts = all_service_starts_by_day([*queued, *unq, other, probe], "primary")
+    assert sorted(starts[D]) == [20, 25, 40, 45, 60, 65]  # IN excluded, probe has no ser_start
+    v1 = by_key(replay_day([*queued, probe]))["p"]
+    s1 = by_key(replay_day([*queued, probe], service_starts=starts[D]))["p"]
+    assert v1.pred != s1.pred
+    est = ServiceRateEstimator(ServiceRateSettings(), 0.0)
+    for s in starts[D]:
+        est.add_service(float(s))
+    # estimate history at earlier events is irrelevant for the point rate
+    assert s1.pred == predict_wait(s1.queue_length, est.estimate(100.0)).predicted_wait_s
 
 
 def test_no_look_ahead_append_and_shuffle():
