@@ -222,7 +222,7 @@ baselines; see [docs/testing_report.md](docs/testing_report.md) and the pre-regi
 
 ```bash
 python scripts/fetch_anonymous_bank.py                 # download + hash-check into datasets/raw/anonymous_bank/
-python -I scripts/validate_anonymous_bank.py           # parse, count exclusions -> outputs/metrics/anonymous_bank_validation.json
+python scripts/validate_anonymous_bank.py              # parse, count exclusions -> outputs/metrics/anonymous_bank_validation.json
 python -I scripts/score_anonymous_bank.py              # replay and score -> outputs/metrics/anonymous_bank_wait_eval.json + figures
 python scripts/export_accuracy.py                      # adds section predictor_on_call_centre_logs for the dashboard
 ```
