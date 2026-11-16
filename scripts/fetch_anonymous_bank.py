@@ -178,11 +178,21 @@ def extract_rar(rar_path: Path, out_dir: Path) -> None:
 
 
 def _extracted_ok(marker: Path, out: Path) -> bool:
-    """True when the marker exists and every member it lists is present under ``out``."""
+    """True when the marker (digest, ``members:<N>``, N names) exists and all members are under ``out``.
+
+    A marker without the ``members:`` header (old format) is not trusted.
+    """
     if not marker.exists():
         return False
-    members = marker.read_text(encoding="utf-8").splitlines()[1:]
-    return all((out / m).is_file() for m in members)
+    lines = marker.read_text(encoding="utf-8").splitlines()
+    if len(lines) < 2 or not lines[1].startswith("members:"):
+        return False
+    try:
+        n = int(lines[1].split(":", 1)[1])
+    except ValueError:
+        return False
+    members = lines[2:]
+    return len(members) == n and all((out / m).is_file() for m in members)
 
 
 def merge_dir(src: Path, dst: Path) -> None:
@@ -257,7 +267,9 @@ def fetch_all(
                 merge_dir(tmp, out)
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
-            marker.write_text("\n".join([digest, *members]) + "\n", encoding="utf-8")
+            marker.write_text(
+                "\n".join([digest, f"members:{len(members)}", *members]) + "\n", encoding="utf-8"
+            )
     return rows
 
 

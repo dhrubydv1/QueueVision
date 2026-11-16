@@ -197,3 +197,36 @@ def test_bad_zip_wrapped_in_fetch_error(tmp_path):
     bad.write_bytes(b"not a zip")
     with pytest.raises(fab.FetchError, match="not a valid zip"):
         fab.safe_extract_zip(bad, tmp_path / "out")
+
+
+def test_old_format_marker_triggers_reextract(tmp_path):
+    good = tmp_path / "good.zip"
+    _zip(good, {"a.txt": b"x"})
+
+    def fake(url, dest):
+        dest.write_bytes(good.read_bytes())
+
+    items = [fab.Item("bern", "a.zip", "https://x/a.zip")]
+    man = tmp_path / "m.csv"
+    fab.fetch_all(tmp_path / "raw", man, fake, items, log=lambda m: None)
+    marker = tmp_path / "raw/bern/.extracted_a.zip"
+    marker.write_text(marker.read_text().splitlines()[0] + "\n")  # digest only
+    shutil.rmtree(tmp_path / "raw/bern/extracted")
+    fab.fetch_all(tmp_path / "raw", man, fake, items, log=lambda m: None)
+    assert (tmp_path / "raw/bern/extracted/a.txt").exists()
+    assert "members:1" in marker.read_text()
+
+
+def test_zero_member_archive_does_not_loop(tmp_path):
+    empty = tmp_path / "empty.zip"
+    _zip(empty, {})
+
+    def fake(url, dest):
+        dest.write_bytes(empty.read_bytes())
+
+    logs: list[str] = []
+    items = [fab.Item("bern", "e.zip", "https://x/e.zip")]
+    man = tmp_path / "m.csv"
+    fab.fetch_all(tmp_path / "raw", man, fake, items, log=logs.append)
+    fab.fetch_all(tmp_path / "raw", man, fake, items, log=logs.append)
+    assert sum(m.startswith("extract:") for m in logs) == 1
