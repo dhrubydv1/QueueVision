@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -30,6 +30,8 @@ class CameraInfo(BaseModel):
 class RunOptions(BaseModel):
     frame_stride: int = 1
     blur_heads: bool = True
+    privacy_mode: Literal["boxes", "frame"] = "boxes"
+    preview_privacy_mode: Literal["boxes", "frame"] = "frame"
     max_frames: int | None = None
     realtime: bool = False
 

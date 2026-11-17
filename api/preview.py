@@ -1,4 +1,4 @@
-"""In-memory live preview of a processing run: head-blurred JPEG frames, never written to disk."""
+"""In-memory live preview of a processing run: privacy-rendered JPEG frames, never written to disk."""
 
 from __future__ import annotations
 
@@ -17,9 +17,16 @@ PREVIEW_MIN_INTERVAL_S = 0.2
 MJPEG_BOUNDARY = "frame"
 
 
-def render_preview(image: np.ndarray, people: Sequence[PersonDetection]) -> np.ndarray:
-    """Blur heads (always, whatever the run's blur option) on a copy, then downscale to 960 px wide."""
-    frame = blur_heads(image.copy(), people)
+def render_preview(
+    image: np.ndarray, people: Sequence[PersonDetection], already_private: bool = False
+) -> np.ndarray:
+    """Copy and downscale to 960 px wide; heads are blurred on the copy unless ``already_private``.
+
+    ``already_private`` says the image was drawn in a privacy mode (``boxes`` or ``frame``) by the
+    run; without it the safety path blurs every detected head, whatever the run's blur option, so an
+    image with no privacy applied is never served.
+    """
+    frame = image.copy() if already_private else blur_heads(image.copy(), people)
     height, width = frame.shape[:2]
     if width > PREVIEW_MAX_WIDTH:
         new_height = max(1, round(height * PREVIEW_MAX_WIDTH / width))
@@ -40,7 +47,14 @@ class PreviewStore:
         self._frames: dict[int, tuple[int, bytes]] = {}
         self._last_encode: dict[int, float] = {}
 
-    def offer(self, video_id: int, image: np.ndarray, people: Sequence[PersonDetection], now: float) -> bool:
+    def offer(
+        self,
+        video_id: int,
+        image: np.ndarray,
+        people: Sequence[PersonDetection],
+        now: float,
+        already_private: bool = False,
+    ) -> bool:
         """Encode this frame unless one was encoded less than 0.2 s ago; True when it was encoded."""
         with self._lock:
             last = self._last_encode.get(video_id)
@@ -48,7 +62,9 @@ class PreviewStore:
                 return False
             self._last_encode[video_id] = now
         ok, buffer = cv2.imencode(
-            ".jpg", render_preview(image, people), [cv2.IMWRITE_JPEG_QUALITY, PREVIEW_JPEG_QUALITY]
+            ".jpg",
+            render_preview(image, people, already_private),
+            [cv2.IMWRITE_JPEG_QUALITY, PREVIEW_JPEG_QUALITY],
         )
         if not ok:
             return False

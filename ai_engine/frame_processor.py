@@ -75,7 +75,6 @@ class FrameProcessor:
             raise ValueError(f"blur_heads=True conflicts with privacy_mode={privacy_mode!r}")
         # ``blur_heads=True`` is the legacy spelling of ``privacy_mode="boxes"``.
         self.privacy_mode = "boxes" if blur_heads else (privacy_mode or "none")
-        self.blur_heads = self.privacy_mode == "boxes"
         #: Undrawn copy of the last processed frame; only set when ``process(keep_clean=True)``.
         self.clean_frame: np.ndarray | None = None
         self.head_fraction = head_fraction
@@ -100,6 +99,11 @@ class FrameProcessor:
         self._frame_size = frame_size
         self._zone_px = self.analyzer.zone.to_pixels(frame_size) if self.analyzer else None
         self._service_px = service_point_pixels(self.camera, frame_size) if self.camera else None
+
+    @property
+    def blur_heads(self) -> bool:
+        """Read-only view of the mode: True exactly when ``privacy_mode == "boxes"``."""
+        return self.privacy_mode == "boxes"
 
     def process(
         self,

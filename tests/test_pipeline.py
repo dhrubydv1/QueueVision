@@ -18,6 +18,7 @@ import pytest
 
 from ai_engine import run_tracking
 from ai_engine.detection.types import PersonDetection
+from ai_engine.frame_processor import FrameProcessor
 from ai_engine.pipeline import iter_frame_results
 from ai_engine.queue.camera_config import (
     AlertSettings,
@@ -580,3 +581,101 @@ def test_cli_outputs_identical_with_image_callback(synthetic_video: Path, tmp_pa
     assert stable(reports["plain"]) == stable(reports["image"])
     saved = [json.loads(paths[label]["metrics"].read_text()) for label in reports]
     assert stable(saved[0]) == stable(saved[1])
+
+
+# --- privacy modes: options, CLI and the preview image --------------------------------------------
+
+
+def _collect_previews(video: Path, tmp_path: Path, **options: Any) -> list[tuple[np.ndarray, str | None]]:
+    seen: list[tuple[np.ndarray, str | None]] = []
+    process_video(
+        video,
+        FakeTracker(),
+        RunOptions(output_dir=tmp_path, h264=False, **options),
+        on_frame=lambda u: seen.append((u.image.copy(), u.image_privacy)),
+        frame_callback_wants_image=True,
+    )
+    return seen
+
+
+def test_run_options_privacy_validation() -> None:
+    assert RunOptions().video_privacy_mode == "none"
+    assert RunOptions(blur_heads=True).video_privacy_mode == "boxes"
+    assert RunOptions(privacy_mode="frame").video_privacy_mode == "frame"
+    assert RunOptions().preview_privacy_mode == "frame"
+    with pytest.raises(ValueError):
+        RunOptions(blur_heads=True, privacy_mode="frame")
+    with pytest.raises(ValueError):
+        RunOptions(privacy_mode="bogus")
+    with pytest.raises(ValueError):
+        RunOptions(preview_privacy_mode="none")
+
+
+def test_cli_privacy_mode_arguments() -> None:
+    assert parse_arguments(["--video", "a.mp4"]).privacy_mode is None
+    assert parse_arguments(["--video", "a.mp4", "--privacy-mode", "frame"]).privacy_mode == "frame"
+    args = parse_arguments(["--video", "a.mp4", "--blur-heads", "--privacy-mode", "boxes"])
+    assert args.blur_heads and args.privacy_mode == "boxes"
+    for bad in ("frame", "none"):
+        with pytest.raises(SystemExit):
+            parse_arguments(["--video", "a.mp4", "--blur-heads", "--privacy-mode", bad])
+    with pytest.raises(SystemExit):
+        parse_arguments(["--video", "a.mp4", "--privacy-mode", "bogus"])
+
+
+def test_preview_image_rendered_in_its_own_mode(synthetic_video: Path, tmp_path: Path) -> None:
+    frame_mode = _collect_previews(synthetic_video, tmp_path / "a")  # video none, preview frame (default)
+    boxes_mode = _collect_previews(synthetic_video, tmp_path / "b", preview_privacy_mode="boxes")
+    assert all(mode == "frame" for _image, mode in frame_mode)
+    assert all(mode == "boxes" for _image, mode in boxes_mode)
+    assert len(frame_mode) == len(boxes_mode) > 0
+    assert any(not np.array_equal(f, b) for (f, _), (b, _) in zip(frame_mode, boxes_mode, strict=True))
+    # the video written for the first run was not touched by the preview render
+    saved = [json.loads(output_paths("synthetic", tmp_path / d)["metrics"].read_text()) for d in ("a", "b")]
+    assert all(r["configuration"]["privacy_mode"] == "none" for r in saved)
+    assert all(r["configuration"]["blur_heads"] is False for r in saved)
+
+
+def test_preview_reuses_drawn_frame_when_modes_match(synthetic_video: Path, tmp_path: Path) -> None:
+    copies: list[int] = []
+    real = FrameProcessor.process
+
+    def spy(self, *args: Any, **kwargs: Any):
+        copies.append(bool(kwargs.get("keep_clean")))
+        return real(self, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(FrameProcessor, "process", spy)
+        same = _collect_previews(
+            synthetic_video, tmp_path / "same", privacy_mode="boxes", preview_privacy_mode="boxes"
+        )
+        assert copies and not any(copies)  # no clean copy needed
+        copies.clear()
+        _collect_previews(
+            synthetic_video, tmp_path / "diff", privacy_mode="boxes", preview_privacy_mode="frame"
+        )
+        assert copies and all(copies)
+    assert all(mode == "boxes" for _image, mode in same)
+
+
+def test_metrics_record_privacy_mode_and_no_unblurred_frame_retained(
+    synthetic_video: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    processors: list[FrameProcessor] = []
+    real_init = FrameProcessor.__init__
+
+    def init(self, *args: Any, **kwargs: Any) -> None:
+        real_init(self, *args, **kwargs)
+        processors.append(self)
+
+    monkeypatch.setattr(FrameProcessor, "__init__", init)
+    report = process_video(
+        synthetic_video,
+        FakeTracker(),
+        RunOptions(output_dir=tmp_path, h264=False, privacy_mode="frame"),
+        on_frame=lambda u: None,
+        frame_callback_wants_image=True,
+    )
+    assert report["configuration"]["privacy_mode"] == "frame"
+    assert report["configuration"]["blur_heads"] is False
+    assert processors[0].clean_frame is None

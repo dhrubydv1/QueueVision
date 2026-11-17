@@ -314,6 +314,7 @@ def _reference_process_video(
             "max_frames": options.max_frames,
             "display_enabled": options.show,
             "blur_heads": options.blur_heads,
+            "privacy_mode": options.video_privacy_mode,  # additive key (Task 2)
             "head_fraction": options.head_fraction if options.blur_heads else None,
             "video_codec": video_codec,
         },
@@ -406,6 +407,8 @@ def run_both(
     # Frozen clock: drawn FPS values and metrics FPS become deterministic (0.0 for processing).
     monkeypatch.setattr(time, "perf_counter", lambda: 1000.0)
     runs = {}
+    same_mode = bool(options.get("blur_heads"))
+    options = {"preview_privacy_mode": "boxes", **options} if same_mode else options
     for label, function in (("reference", _reference_process_video), ("new", process_video)):
         updates: list[tuple[Any, ...]] = []
 
@@ -418,7 +421,9 @@ def run_both(
                     update.people_in_frame,
                     update.processing_fps,
                     update.queue,
-                    hashlib.sha256(update.image.tobytes()).hexdigest(),
+                    # the reference passes the drawn (video-mode) frame; the new code renders the preview
+                    # in ``preview_privacy_mode``, which only matches it when it equals the video mode
+                    hashlib.sha256(update.image.tobytes()).hexdigest() if same_mode else None,
                     update.people,
                 )
             )

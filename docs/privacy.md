@@ -29,7 +29,7 @@ what it does not, and what you must do before pointing a camera at anyone.
 | Metrics JSON (`outputs/metrics/`) | Counts, timings, settings, file paths | Low |
 | Annotation frames (`datasets/annotations/<name>_frames/`) | Still images from the footage | **Yes** |
 | API uploads (`data/uploads/<id>/`) | The original uploaded video, unblurred | **Yes** |
-| API annotated video (`data/outputs/<id>/videos/`) | As above; heads blurred when `blur_heads` is on (the API default) | Reduced if blurred, otherwise **yes** |
+| API annotated video (`data/outputs/<id>/videos/`) | As above; heads blurred (`privacy_mode=boxes`) or the whole frame pixelated (`frame`) when `blur_heads` is on (the API default) | Reduced if blurred, otherwise **yes** |
 | API database (`data/queuevision.db`) | Events, waits, alerts, time series and reports: times, counts, anonymous `person_key`, track IDs, file paths and the original upload file name | Low: no images (the file name can still reveal where or when a clip was recorded) |
 
 Events and waits contain **no identities**. `person_key` (`p0001`, `p0002`,
@@ -67,6 +67,32 @@ Suggested policy for real footage:
    check it frame by frame first.
 5. The same applies to runs in `data/`: delete them through the API when the
    demo or evaluation is finished.
+
+## Privacy modes
+
+| Mode | What is hidden | CLI | API |
+|---|---|---|---|
+| `none` | Nothing | default for `run_tracking.py` | not offered |
+| `boxes` | The top `--head-fraction` of every detected person box is blurred | `--privacy-mode boxes` or `--blur-heads` | `privacy_mode=boxes` (default) |
+| `frame` | The whole frame is pixelated before boxes, zone and panel are drawn | `--privacy-mode frame` | `privacy_mode=frame` |
+
+* **Saved video.** CLI default `none` (unchanged). `--blur-heads` means `boxes`;
+  combining it with `--privacy-mode none` or `frame` is an error. API default
+  `boxes`. `blur_heads=false` on an upload still means **no blur at all** on the
+  saved video, whatever `privacy_mode` says (the run's metrics record the mode
+  actually used under `configuration.privacy_mode`).
+* **Live preview** (`preview.jpg`, `preview.mjpg`, dashboard). Always private:
+  `preview_privacy_mode` is `boxes` or `frame`, default **`frame`** (before this
+  change previews blurred heads only), whatever `blur_heads` is. There is no way
+  to turn the preview privacy off. The preview is rendered from a copy of the
+  undrawn frame only when its mode differs from the saved video's.
+* **Trade-off.** `frame` also hides people the detector missed, but it hides scene
+  detail too (shelves, screens, signage, the queue itself is only coarse blocks).
+  `boxes` keeps the scene detail but a person who is not detected is not blurred.
+* **Limit of `frame`.** The pixel block is `max(8, width / 40)` px, so it scales with
+  the frame width, not with the size of a person. A very close, large face can span
+  several blocks and stay partly recognisable. Check a sample of the output
+  visually, especially for close-up cameras, before showing it.
 
 ## Limits of head blur
 

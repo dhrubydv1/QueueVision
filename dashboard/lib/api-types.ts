@@ -326,6 +326,18 @@ export interface components {
             /** Max Frames */
             max_frames?: number | null;
             /**
+             * Preview Privacy Mode
+             * @default frame
+             * @enum {string}
+             */
+            preview_privacy_mode: "boxes" | "frame";
+            /**
+             * Privacy Mode
+             * @default boxes
+             * @enum {string}
+             */
+            privacy_mode: "boxes" | "frame";
+            /**
              * Realtime
              * @default false
              */
@@ -430,6 +442,18 @@ export interface components {
             frame_stride: number;
             /** Max Frames */
             max_frames?: number | null;
+            /**
+             * Preview Privacy Mode
+             * @default frame
+             * @enum {string}
+             */
+            preview_privacy_mode: "boxes" | "frame";
+            /**
+             * Privacy Mode
+             * @default boxes
+             * @enum {string}
+             */
+            privacy_mode: "boxes" | "frame";
             /**
              * Realtime
              * @default false
