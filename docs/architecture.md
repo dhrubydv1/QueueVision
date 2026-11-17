@@ -272,7 +272,7 @@ exit code 1.
 | `api/main.py` | `create_app(settings, tracker_factory)`: assembly only (settings, `JobManager`, lifespan, exception handler, `include_router` calls); `app` for uvicorn |
 | `api/deps.py` | Shared dependencies read from `request.app.state` (`get_settings`, `get_jobs`, `get_preview`, `SettingsDep`, `JobsDep`), `open_db`, `origin_allowed`, `contained_path`, `get_record`. No module-level app state |
 | `api/routes/` | One router module per area, listed below |
-| `api/preview.py` | `PreviewStore` (latest head-blurred JPEG per processing run, memory only, at most 5 per second), `render_preview`, `mjpeg_part` |
+| `api/preview.py` | `PreviewStore` (latest privacy-rendered JPEG per processing run, memory only, at most 5 per second), `render_preview`, `mjpeg_part` |
 | `api/models.py` | Pydantic response models |
 | `api/static/index.html` | Demo test page (plain HTML/CSS/JS, no build step, no CDN) |
 | `api/__main__.py` | `python -m api` |

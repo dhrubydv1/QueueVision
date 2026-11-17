@@ -105,7 +105,7 @@ def upload(
     options = {
         "frame_stride": frame_stride,
         "blur_heads": blur_heads,
-        "privacy_mode": privacy_mode,
+        "privacy_mode": privacy_mode if blur_heads else "none",  # the mode the saved video really gets
         "preview_privacy_mode": preview_privacy_mode,
         "max_frames": max_frames,
         "realtime": realtime,

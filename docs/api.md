@@ -357,7 +357,7 @@ returns the option:
  "summary": {"camera_id": "cad_seq25", "zone": [[0.06, 0.6], [0.94, 0.6], [0.94, 0.93], [0.06, 0.93]], "...": "..."}}
 ```
 
-Runs stored before Sprint 7 have no `realtime` key in `options`; treat it as `false`. Runs stored before the frame privacy mode have no `privacy_mode` / `preview_privacy_mode` keys; they were `boxes` (when `blur_heads` is true) and head-blurred previews.
+Runs stored before Sprint 7 have no `realtime` key in `options`; treat it as `false`. `options.privacy_mode` is the mode the saved video really got: `none` when `blur_heads` is false (whatever was posted), else `boxes` or `frame`. Runs stored before the frame privacy mode report `null` for both `privacy_mode` and `preview_privacy_mode` (their modes were not recorded; those saved videos followed `blur_heads` and their previews were head-blurred).
 
 ### A2. Live preview
 
@@ -498,4 +498,4 @@ always scope them by `video_id`.
 
 No live cameras, no authentication or accounts, no HTTPS or deployment, and
 only one job processes at a time. The annotated video is played after the run;
-during a run only the head-blurred preview below is available.
+during a run only the privacy-rendered (pixelated by default) preview below is available.

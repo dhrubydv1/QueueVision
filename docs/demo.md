@@ -49,7 +49,7 @@ open on the recorded run instead.
 
 ## 3. Live page (2 minutes)
 
-The audience sees the video preview with **heads blurred**, and the figures
+The audience sees the video preview with **the whole frame pixelated** (the default preview privacy mode), and the figures
 "Queue length", "Predicted wait", "Service rate" and "People in frame" update
 while the run is paced to the video's own speed. The queue chart and the Events
 list grow, and "Last update HH:MM:SS" appears. Point out that "Predicted wait"

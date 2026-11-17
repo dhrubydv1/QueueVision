@@ -89,7 +89,9 @@ Suggested policy for real footage:
 * **Trade-off.** `frame` also hides people the detector missed, but it hides scene
   detail too (shelves, screens, signage, the queue itself is only coarse blocks).
   `boxes` keeps the scene detail but a person who is not detected is not blurred.
-* **Limit of `frame`.** The pixel block is `max(8, width / 40)` px, so it scales with
+* **Limit of `frame`.** The pixel block is `max(8, round(width / 40))` px (the frame is
+  downscaled to `width // block` cells and scaled back up, so the effective block can be
+  slightly larger; the 960-px preview of a wider frame shows it proportionally smaller), so it scales with
   the frame width, not with the size of a person. A very close, large face can span
   several blocks and stay partly recognisable. Check a sample of the output
   visually, especially for close-up cameras, before showing it.

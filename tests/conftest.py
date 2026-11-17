@@ -33,12 +33,18 @@ BYTETRACK_DEFAULTS = {
 }
 
 
-def write_synthetic_video(path: Path, frames: int = SYNTHETIC_FRAMES) -> Path:
-    """Write a small MP4 of a white square moving across a dark background."""
+def write_synthetic_video(path: Path, frames: int = SYNTHETIC_FRAMES, textured: bool = False) -> Path:
+    """Write a small MP4 of a white square moving across a dark background.
+
+    ``textured`` swaps the flat background for fixed-seed noise, so blur and pixelation are detectable.
+    """
+    noise = np.random.default_rng(7).integers(
+        0, 256, (SYNTHETIC_SIZE[1], SYNTHETIC_SIZE[0], 3), dtype=np.uint8
+    )
     width, height = SYNTHETIC_SIZE
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), SYNTHETIC_FPS, (width, height))
     for index in range(frames):
-        frame = np.full((height, width, 3), 40, dtype=np.uint8)
+        frame = noise.copy() if textured else np.full((height, width, 3), 40, dtype=np.uint8)
         x = 5 + index * 5
         cv2.rectangle(frame, (x, 40), (x + 20, 80), (255, 255, 255), -1)
         writer.write(frame)

@@ -30,8 +30,9 @@ class CameraInfo(BaseModel):
 class RunOptions(BaseModel):
     frame_stride: int = 1
     blur_heads: bool = True
-    privacy_mode: Literal["boxes", "frame"] = "boxes"
-    preview_privacy_mode: Literal["boxes", "frame"] = "frame"
+    # null for runs stored before the frame privacy mode (their modes were not recorded)
+    privacy_mode: Literal["none", "boxes", "frame"] | None = None
+    preview_privacy_mode: Literal["boxes", "frame"] | None = None
     max_frames: int | None = None
     realtime: bool = False
 

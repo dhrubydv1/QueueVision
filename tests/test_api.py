@@ -491,3 +491,17 @@ def test_blur_heads_false_means_no_blur_whatever_privacy_mode(settings, clip) ->
         report = client.get(f"/api/videos/{video_id}/report").json()
         assert report["configuration"]["privacy_mode"] == "none"
         assert report["configuration"]["blur_heads"] is False
+
+
+def test_old_run_options_report_null_privacy_modes(settings) -> None:
+    with make_client(settings) as client:
+        conn = db.connect(settings.db_path)
+        try:  # a run stored before the frame privacy mode: no privacy keys in its options
+            video_id = db.create_video(
+                conn, "old.mp4", "walker", {"frame_stride": 1, "blur_heads": True, "max_frames": None}
+            )
+        finally:
+            conn.close()
+        options = client.get(f"/api/videos/{video_id}").json()["options"]
+        assert options["privacy_mode"] is None and options["preview_privacy_mode"] is None
+        assert options["blur_heads"] is True and options["frame_stride"] == 1

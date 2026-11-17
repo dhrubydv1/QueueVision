@@ -9,6 +9,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -623,17 +624,44 @@ def test_cli_privacy_mode_arguments() -> None:
         parse_arguments(["--video", "a.mp4", "--privacy-mode", "bogus"])
 
 
-def test_preview_image_rendered_in_its_own_mode(synthetic_video: Path, tmp_path: Path) -> None:
-    frame_mode = _collect_previews(synthetic_video, tmp_path / "a")  # video none, preview frame (default)
-    boxes_mode = _collect_previews(synthetic_video, tmp_path / "b", preview_privacy_mode="boxes")
+def _equal_pair_share(region: np.ndarray) -> float:
+    """Share of horizontally adjacent pixel pairs that are identical (high only when pixelated)."""
+    return float((region[:, 1:] == region[:, :-1]).all(axis=2).mean())
+
+
+def _saved_frame_hashes(path: Path) -> list[bytes]:
+    capture = cv2.VideoCapture(str(path))
+    hashes = []
+    while True:
+        ok, frame = capture.read()
+        if not ok:
+            break
+        hashes.append(frame.tobytes())
+    capture.release()
+    return hashes
+
+
+def test_preview_image_rendered_in_its_own_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    video = write_synthetic_video(tmp_path / "textured.mp4", textured=True)
+    frame_mode = _collect_previews(video, tmp_path / "a")  # video none, preview frame (default)
+    boxes_mode = _collect_previews(video, tmp_path / "b", preview_privacy_mode="boxes")
     assert all(mode == "frame" for _image, mode in frame_mode)
     assert all(mode == "boxes" for _image, mode in boxes_mode)
     assert len(frame_mode) == len(boxes_mode) > 0
-    assert any(not np.array_equal(f, b) for (f, _), (b, _) in zip(frame_mode, boxes_mode, strict=True))
-    # the video written for the first run was not touched by the preview render
-    saved = [json.loads(output_paths("synthetic", tmp_path / d)["metrics"].read_text()) for d in ("a", "b")]
-    assert all(r["configuration"]["privacy_mode"] == "none" for r in saved)
-    assert all(r["configuration"]["blur_heads"] is False for r in saved)
+    corner = (slice(96, 128), slice(0, 64))  # away from the person box and the panel
+    assert all(_equal_pair_share(image[corner]) > 0.6 for image, _ in frame_mode)  # pixelated
+    assert all(_equal_pair_share(image[corner]) < 0.2 for image, _ in boxes_mode)  # noise left sharp
+    # the saved video does not depend on the preview mode (frozen clock: the drawn FPS text is
+    # otherwise run-dependent)
+    monkeypatch.setattr(time, "perf_counter", lambda: 1000.0)
+    flat = write_synthetic_video(tmp_path / "flat.mp4")
+    _collect_previews(flat, tmp_path / "c")
+    _collect_previews(flat, tmp_path / "d", preview_privacy_mode="boxes")
+    saved = [_saved_frame_hashes(output_paths("flat", tmp_path / d)["video"]) for d in ("c", "d")]
+    assert saved[0] and saved[0] == saved[1]
+    reports = [json.loads(output_paths("textured", tmp_path / d)["metrics"].read_text()) for d in ("a", "b")]
+    assert all(r["configuration"]["privacy_mode"] == "none" for r in reports)
+    assert all(r["configuration"]["blur_heads"] is False for r in reports)
 
 
 def test_preview_reuses_drawn_frame_when_modes_match(synthetic_video: Path, tmp_path: Path) -> None:

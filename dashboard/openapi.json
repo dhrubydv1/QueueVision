@@ -408,22 +408,35 @@
             "title": "Max Frames"
           },
           "preview_privacy_mode": {
-            "default": "frame",
-            "enum": [
-              "boxes",
-              "frame"
+            "anyOf": [
+              {
+                "enum": [
+                  "boxes",
+                  "frame"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Preview Privacy Mode",
-            "type": "string"
+            "title": "Preview Privacy Mode"
           },
           "privacy_mode": {
-            "default": "boxes",
-            "enum": [
-              "boxes",
-              "frame"
+            "anyOf": [
+              {
+                "enum": [
+                  "none",
+                  "boxes",
+                  "frame"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Privacy Mode",
-            "type": "string"
+            "title": "Privacy Mode"
           },
           "realtime": {
             "default": false,

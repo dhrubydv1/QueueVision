@@ -442,18 +442,10 @@ export interface components {
             frame_stride: number;
             /** Max Frames */
             max_frames?: number | null;
-            /**
-             * Preview Privacy Mode
-             * @default frame
-             * @enum {string}
-             */
-            preview_privacy_mode: "boxes" | "frame";
-            /**
-             * Privacy Mode
-             * @default boxes
-             * @enum {string}
-             */
-            privacy_mode: "boxes" | "frame";
+            /** Preview Privacy Mode */
+            preview_privacy_mode?: ("boxes" | "frame") | null;
+            /** Privacy Mode */
+            privacy_mode?: ("none" | "boxes" | "frame") | null;
             /**
              * Realtime
              * @default false
