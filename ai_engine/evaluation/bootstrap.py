@@ -98,7 +98,7 @@ def pooled_intervals(
     stats = day_sums(idx, [cols[:, 0], cols[:, 1], cols[:, 2], np.ones(len(cols))], n_units)
     counts = resample_counts(n_units, n_resamples, seed)
     for k, name in enumerate(METRICS):
-        out[name] = _interval(bootstrap_stat(stats, counts, lambda t, k=k: t[:, k] / t[:, 3]))
+        out[name] = _interval(bootstrap_stat(stats, counts, lambda t, k=k: t[:, k] / t[:, 3], level))
     return out
 
 
@@ -150,7 +150,7 @@ def paired_difference(
     stats = day_sums(idx, [ca[:, 0], ca[:, 1], ca[:, 2], cb[:, 0], cb[:, 1], cb[:, 2], ones], n_units)
     counts = resample_counts(n_units, n_resamples, seed)
     for k, name in enumerate(METRICS):
-        iv = _interval(bootstrap_stat(stats, counts, lambda t, k=k: (t[:, k] - t[:, k + 3]) / t[:, 6]))
+        iv = _interval(bootstrap_stat(stats, counts, lambda t, k=k: (t[:, k] - t[:, k + 3]) / t[:, 6], level))
         iv["half_width"] = (iv["high"] - iv["low"]) / 2
         out[name] = iv
     return out

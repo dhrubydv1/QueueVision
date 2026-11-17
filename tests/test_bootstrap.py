@@ -167,3 +167,18 @@ def test_attribution_summary_side_by_side():
     assert s["clips"] == ["c"]
     assert s["from5s"]["iou_0.5"]["totals"]["tp"] == 3 and s["from5s"]["iou_0.3"]["totals"]["tp"] == 4
     assert s["from5s"]["iou_0.3"]["per_frame"]["tp"] == 2.0
+
+
+def test_level_drives_percentile_bounds():
+    data = {"a": clip(0, 3), "b": clip(1, 3), "c": clip(3, 3), "d": clip(6, 3)}
+    clips = list(data)
+    wide = pooled_intervals(data, clips, level=0.95)
+    narrow = pooled_intervals(data, clips, level=0.50)
+    assert narrow["level"] == 0.50
+    assert narrow["mae"]["low"] > wide["mae"]["low"]
+    assert narrow["mae"]["high"] < wide["mae"]["high"]
+    assert narrow["mae"]["point"] == wide["mae"]["point"]
+    assert pooled_intervals(data, clips) == wide
+    paired_narrow = paired_difference(data, {k: clip(1, 3) for k in clips}, clips, level=0.50)
+    paired_wide = paired_difference(data, {k: clip(1, 3) for k in clips}, clips)
+    assert paired_narrow["mae"]["half_width"] < paired_wide["mae"]["half_width"]

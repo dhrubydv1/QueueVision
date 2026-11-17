@@ -231,10 +231,16 @@ function ComparisonsCard({ data }: Readonly<{ data: AccuracyData }>) {
           <tbody>
             <tr className="border-t border-border">
               <td className="py-1 pr-4 font-medium text-text">{`${cur.configuration}: ${cur.label} (current)`}</td>
-              <td className="num py-1 pr-4">{`${formatNumber(cur.test_mae, 2)} [${range(cur.test_interval_clip_bootstrap_95)}]`}</td>
+              <td className="num py-1 pr-4">{cur.test_interval_clip_bootstrap_95
+                  ? `${formatNumber(cur.test_mae, 2)} [${range(cur.test_interval_clip_bootstrap_95)}]`
+                  : formatNumber(cur.test_mae, 2)}</td>
               <td className="py-1 pr-4">{"\u2014"}</td>
               <td className="num py-1 pr-4">{formatNumber(cur.val_mae, 2)}</td>
-              <td className="py-1 pr-4">{"\u2014"}</td>
+              <td className="num py-1 pr-4">
+                {cur.processing_fps != null && cur.clip_fps != null
+                  ? `${formatNumber(cur.processing_fps, 1)} of ${formatNumber(cur.clip_fps, 0)}`
+                  : "\u2014"}
+              </td>
               <td className="py-1">Current default</td>
             </tr>
             {cmp.rows.map((r) => (

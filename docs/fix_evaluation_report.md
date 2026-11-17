@@ -89,8 +89,8 @@ from the commands re-run on the final tree; raw outputs saved in `outputs/s9_eva
 
 | Command | Baseline | Final |
 |---|---|---|
-| `.venv/bin/python -m pytest -q` | 514 passed | 542 passed |
-| `.venv/bin/python -m pytest -q -m "not integration"` | 503 passed, 11 deselected | 531 passed, 11 deselected |
+| `.venv/bin/python -m pytest -q` | 514 passed | 544 passed |
+| `.venv/bin/python -m pytest -q -m "not integration"` | 503 passed, 11 deselected | 533 passed, 11 deselected |
 | `.venv/bin/ruff check .` | All checks passed | All checks passed |
 | `.venv/bin/ruff format --check .` | 155 files already formatted | 162 files already formatted (161 in the first run at the end of the session; the count differs by one, cause not investigated, ruff check and format --check both pass) |
 | dashboard `npm run lint` | clean | clean |
@@ -99,7 +99,7 @@ from the commands re-run on the final tree; raw outputs saved in `outputs/s9_eva
 | dashboard `npm run build` | success | success |
 | dashboard `npm run e2e` (chromium + webkit) | 14 passed | 14 passed (4.1 m) |
 
-Net change in tests: Python 514 to 542, Vitest 135 to 140 (not a per-file count). The e2e suite uses port 8765 only (`dashboard/e2e/server.ts`), never 8000, 8001 or 8770.
+Net change in tests: Python 514 to 544, Vitest 135 to 140 (not a per-file count). The pytest, ruff, lint, typecheck, Vitest and build rows were re-run after the final whole-branch review fixes (saved in `outputs/s9_eval/final_commands/`); the e2e row is from before them and was not re-run (the review fixes change one table cell in `AccuracyView` and no e2e-covered flow). The e2e suite uses port 8765 only (`dashboard/e2e/server.ts`), never 8000, 8001 or 8770.
 
 ## Measurements
 
@@ -139,7 +139,7 @@ percentile 95 %; paired for differences; per-frame bootstrap optimistic. Sources
   tracking 9.56 and 9.31 ms, mean 9.44, 25.55 and 26.61 fps, mean 26.1; `gmc_method` none `run3`, `run7` tracking 4.03
   and 4.14 ms, mean 4.08, 32.61 and 31.76 fps, mean 32.2; differences 5.35 ms and 6.1 fps). ByteTrack (`run1`, `run5`)
   is 31.86 and 32.73 fps, so the two-run spread is 0.87 fps (BoT-SORT 1.06); n = 2, indicative only. ReID adds about 20
-  ms more. A later session that wants BoT-SORT in real time should start with GMC off (exposed only through
+  ms more (derived: tracking 29.91 ms in the single ReID run `run4` against the 9.44 ms sparseOptFlow mean, difference 20.5 ms; n = 1). A later session that wants BoT-SORT in real time should start with GMC off (exposed only through
   `scripts/benchmark.py --gmc-method`; not wired to `run_tracking`; speed only, **not evaluated for accuracy**).
 - **ReID CoreML guard.** Ultralytics takes ReID features from the detector only for a PyTorch `.pt` model with a
   non-end2end Detect head. For a CoreML `.mlpackage` (or end2end) detector it silently switches to

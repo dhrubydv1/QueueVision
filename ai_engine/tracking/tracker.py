@@ -129,7 +129,11 @@ class PersonTracker:
         self._base_config = (
             base_config
             if base_config is not None
-            else load_base_tracker_config(f"{self.settings.tracker_type}.yaml")
+            else load_base_tracker_config(
+                config.TRACKER_CONFIG
+                if self.settings.tracker_type == "bytetrack"
+                else f"{self.settings.tracker_type}.yaml"
+            )
         )
         self._needs_reset = True
         self.configure(effective_fps)

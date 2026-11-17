@@ -195,7 +195,7 @@ describe("AccuracyView evidence additions", () => {
     },
     comparisons: {
       source: "cmp.json", protocol: "protocol vX", series: "s", bootstrap: "b", notes: [],
-      current: { configuration: "A", label: "Current thing", test_mae: 1.5, test_interval_clip_bootstrap_95: band(1, 2), val_mae: 1.1 },
+      current: { configuration: "A", label: "Current thing", test_mae: 1.5, test_interval_clip_bootstrap_95: band(1, 2), val_mae: 1.1, processing_fps: 31.94, clip_fps: 30 },
       rows: [
         { configuration: "B", label: "Candidate B", metric: "m", test_mae: 1.25, interval_clip_bootstrap_95: band(0.75, 1.75),
           paired_delta_vs_A: -0.25, paired_delta_interval_95: band(-0.5, 0.1), val_mae: 0.95, processing_fps: 20.5, clip_fps: 30,
@@ -223,6 +223,7 @@ describe("AccuracyView evidence additions", () => {
     const rows = within(screen.getByTestId("comparison-table")).getAllByRole("row").slice(1);
     expect(rows).toHaveLength(3);
     expect(rows[0]).toHaveTextContent("1.50 [1.00\u20132.00]");
+    expect(rows[0]).toHaveTextContent("31.9 of 30");
     expect(rows[1]).toHaveTextContent("1.25 [0.75\u20131.75]");
     expect(rows[1]).toHaveTextContent("\u22120.25 [\u22120.50\u20130.10]".replace("\u22120.50", "-0.50"));
     expect(rows[1]).toHaveTextContent("20.5 of 30");

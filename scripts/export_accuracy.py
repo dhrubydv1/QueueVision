@@ -370,10 +370,18 @@ def _comparisons(outputs: Path, missing: list[dict]) -> dict:
     data = _load(outputs / "s9_eval" / "comparisons.json")
     try:
         configs = data["configurations"]
-        current_test = _load(outputs / "s9_eval" / "intervals_default.json")["splits"]["test"][
-            "clip_bootstrap"
-        ]["mae"]
+        current_interval = None
+        try:
+            current_test = _load(outputs / "s9_eval" / "intervals_default.json")["splits"]["test"][
+                "clip_bootstrap"
+            ]["mae"]
+            current_interval = [current_test["low"], current_test["high"]]
+        except (_Missing, KeyError, TypeError) as error:
+            missing.append(
+                {"section": "comparisons", "path": INTERVALS, "reason": f"current interval: {error}"}
+            )
         base = configs["A"]
+        bench = base.get("benchmark") or {}
         rows = []
         for r in data["rows"]:
             cfg, decision = r["configuration"], r["decision"]
@@ -419,8 +427,11 @@ def _comparisons(outputs: Path, missing: list[dict]) -> dict:
                 "configuration": "A",
                 "label": base["label"],
                 "test_mae": base["per_split_smoothed_from5s"]["test"]["mae"],
-                "test_interval_clip_bootstrap_95": [current_test["low"], current_test["high"]],
+                "test_interval_clip_bootstrap_95": current_interval,
+                "interval_source": INTERVALS,
                 "val_mae": base["per_split_smoothed_from5s"]["val"]["mae"],
+                "processing_fps": bench.get("processing_fps"),
+                "clip_fps": bench.get("clip_fps"),
             },
             "rows": rows,
         }

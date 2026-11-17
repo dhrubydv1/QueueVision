@@ -147,7 +147,11 @@ def comparisons_file() -> dict:
         "bootstrap": "clip-level",
         "notes": ["note"],
         "configurations": {
-            "A": {"label": "current", "per_split_smoothed_from5s": {"val": {"mae": 1.2}, "test": split}},
+            "A": {
+                "label": "current",
+                "per_split_smoothed_from5s": {"val": {"mae": 1.2}, "test": split},
+                "benchmark": {"processing_fps": 31.9, "clip_fps": 30.0},
+            },
             "B": {"label": "candidate B"},
         },
         "rows": [comparison_row("B", False, False)],
@@ -528,6 +532,8 @@ def test_comparisons_rows_and_decision(tmp_path: Path) -> None:
     assert row["failed_criteria"] == ["a", "c"]
     assert row["paired_delta_interval_95"] == [-0.4, 0.2]
     assert row["val_mae"] == 0.8 and row["processing_fps"] == 20.5
+    assert cmp["current"]["processing_fps"] == 31.9 and cmp["current"]["clip_fps"] == 30.0
+    assert cmp["current"]["test_interval_clip_bootstrap_95"] == [1.0, 2.0]
 
 
 def test_new_sections_missing_reported(tmp_path: Path) -> None:
@@ -545,3 +551,14 @@ def test_missing_paired_interval_reported(tmp_path: Path) -> None:
     out = build_accuracy(outputs, splits, NOW)
     assert out["comparisons"]["rows"][0]["paired_delta_interval_95"] is None
     assert any(m["path"] == "outputs/s9_eval/B/intervals_vs_A.json" for m in out["missing_sources"])
+
+
+def test_missing_current_interval_keeps_comparisons(tmp_path: Path) -> None:
+    outputs, splits = make_sources(tmp_path)
+    (outputs / "s9_eval" / "intervals_default.json").unlink()
+    out = build_accuracy(outputs, splits, NOW)
+    cmp = out["comparisons"]
+    assert cmp is not None and len(cmp["rows"]) == 1
+    assert cmp["current"]["test_interval_clip_bootstrap_95"] is None
+    cmp_missing = [m for m in out["missing_sources"] if m["section"] == "comparisons"]
+    assert [m["path"] for m in cmp_missing] == ["outputs/s9_eval/intervals_default.json"]

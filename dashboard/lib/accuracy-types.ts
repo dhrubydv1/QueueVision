@@ -111,8 +111,13 @@ export interface ComparisonsSection {
     configuration: string;
     label: string;
     test_mae: number;
-    test_interval_clip_bootstrap_95: Band;
+    /** null when intervals_default.json was missing (see missing_sources). */
+    test_interval_clip_bootstrap_95: Band | null;
+    interval_source?: string;
     val_mae: number;
+    /** From the current default's benchmark; null/absent when not exported. */
+    processing_fps?: number | null;
+    clip_fps?: number | null;
   };
   rows: ComparisonRow[];
 }

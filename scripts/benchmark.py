@@ -431,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
         p.error("--warmup-frames must be >= 0")
     if args.tracker != "botsort" and (args.reid == "on" or args.gmc_method):
         p.error("--reid/--gmc-method require --tracker botsort")
-    if args.reid == "on" and Path(args.model).suffix.lower() != ".pt":
+    if not replay and args.reid == "on" and Path(args.model).suffix.lower() != ".pt":
         p.error("--reid on needs a PyTorch .pt model, not CoreML")
 
     started = datetime.now(UTC).isoformat(timespec="seconds")
