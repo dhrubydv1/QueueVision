@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ApiError } from "@/lib/api";
 import type {
-  AccuracyData, CallCentreMethod, CallCentreMethodKey, CountErrorCategory, Interval, MissingSource,
+  AccuracyData, Band, CallCentreMethod, ComparisonRow, CriterionLetter, CallCentreMethodKey, CountErrorCategory, Interval, MissingSource, QueuePooledMetrics,
 } from "@/lib/accuracy-types";
 import { formatCount, formatNumber, formatSigned } from "@/lib/format";
 import { EmptyState } from "@/components/EmptyState";
@@ -188,6 +188,120 @@ function ChangesSection({ data }: Readonly<{ data: AccuracyData }>) {
   );
 }
 
+const range = (b: Band, digits = 2) => `${formatNumber(b[0], digits)}\u2013${formatNumber(b[1], digits)}`;
+
+/** "1.62 people, 95% interval 0.97\u20132.03, 4 clips"; null when the intervals are missing. */
+export function headlineInterval(t: QueuePooledMetrics): string | null {
+  const band = t.interval_clip_bootstrap_95?.mae;
+  if (!band || t.n_clips === undefined) return null;
+  return `${formatNumber(t.mae, 2)} people, 95% interval ${range(band)}, ${t.n_clips} clips`;
+}
+
+export const COMPARISON_TITLE = "Candidate configurations against the current default";
+const CRITERION_TEXT: Record<CriterionLetter, string> = {
+  a: "(a) test error not clearly lower",
+  b: "(b) validation error worse",
+  c: "(c) slower than real time",
+};
+
+function ComparisonsCard({ data }: Readonly<{ data: AccuracyData }>) {
+  const cmp = data.comparisons;
+  if (cmp === undefined) return null;
+  if (!cmp) return <Section title={COMPARISON_TITLE}><Unavailable text={unavailable(data.missing_sources, "comparisons")} /></Section>;
+  const withBand = (v: number, b: Band | null) => (b ? `${formatSigned(v, 2)} [${range(b)}]` : formatSigned(v, 2));
+  const cur = cmp.current;
+  const ql = data.queue_length?.pooled;
+  const clipCounts = ql ? `With ${ql.val.clips.length} validation and ${ql.test.clips.length} test clips` : "With so few clips";
+  const decision = (r: ComparisonRow) => (r.adopt ? "Adopted" : "Not adopted");
+  return (
+    <Section title={COMPARISON_TITLE}>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm" data-testid="comparison-table">
+          <caption className="sr-only">Test and validation error, speed and adoption decision for each configuration</caption>
+          <thead>
+            <tr className="text-text-2">
+              <th className="py-1 pr-4 font-medium">Configuration</th>
+              <th className="py-1 pr-4 font-medium">Test MAE, people (95% interval)</th>
+              <th className="py-1 pr-4 font-medium">Change vs current, paired (95% interval)</th>
+              <th className="py-1 pr-4 font-medium">Val MAE</th>
+              <th className="py-1 pr-4 font-medium">Processing fps</th>
+              <th className="py-1 font-medium">Decision</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="border-t border-border">
+              <td className="py-1 pr-4 font-medium text-text">{`${cur.configuration}: ${cur.label} (current)`}</td>
+              <td className="num py-1 pr-4">{cur.test_interval_clip_bootstrap_95
+                  ? `${formatNumber(cur.test_mae, 2)} [${range(cur.test_interval_clip_bootstrap_95)}]`
+                  : formatNumber(cur.test_mae, 2)}</td>
+              <td className="py-1 pr-4">{"\u2014"}</td>
+              <td className="num py-1 pr-4">{formatNumber(cur.val_mae, 2)}</td>
+              <td className="num py-1 pr-4">
+                {cur.processing_fps != null && cur.clip_fps != null
+                  ? `${formatNumber(cur.processing_fps, 1)} of ${formatNumber(cur.clip_fps, 0)}`
+                  : "\u2014"}
+              </td>
+              <td className="py-1">Current default</td>
+            </tr>
+            {cmp.rows.map((r) => (
+              <tr key={r.configuration} className="border-t border-border">
+                <td className="py-1 pr-4 text-text">{`${r.configuration}: ${r.label}`}</td>
+                <td className="num py-1 pr-4">{`${formatNumber(r.test_mae, 2)} [${range(r.interval_clip_bootstrap_95)}]`}</td>
+                <td className="num py-1 pr-4">{withBand(r.paired_delta_vs_A, r.paired_delta_interval_95)}</td>
+                <td className="num py-1 pr-4">{formatNumber(r.val_mae, 2)}</td>
+                <td className="num py-1 pr-4">{`${formatNumber(r.processing_fps, 1)} of ${formatNumber(r.clip_fps, 0)}`}</td>
+                <td className="py-1">
+                  {decision(r)}
+                  {r.failed_criteria.length > 0 ? ` \u2014 ${r.failed_criteria.map((c) => CRITERION_TEXT[c]).join("; ")}` : ""}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p data-testid="comparison-caption" className="mt-3 text-xs text-text-3">
+        {`${clipCounts} these intervals are wide. Adoption follows the rule in ${cmp.protocol}. Source: ${cmp.source}.`}
+      </p>
+    </Section>
+  );
+}
+
+function AttributionCard({ data }: Readonly<{ data: AccuracyData }>) {
+  const at = data.attribution_iou;
+  if (at === undefined) return null;
+  if (!at) return <Section title={ATTRIBUTION_TITLE}><Unavailable text={unavailable(data.missing_sources, "attribution_iou")} /></Section>;
+  const s = at.per_split.test;
+  const loose = new Map(s["iou_0.3"].categories.map((c) => [c.key, c]));
+  return (
+    <Section title={ATTRIBUTION_TITLE}>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm" data-testid="attribution-table">
+          <caption className="sr-only">Test-split count errors per labelled frame at two box-overlap thresholds</caption>
+          <thead>
+            <tr className="text-text-2">
+              <th className="py-1 pr-4 font-medium">Cause</th>
+              <th className="py-1 pr-4 font-medium">IoU 0.5, per frame</th>
+              <th className="py-1 font-medium">IoU 0.3, per frame</th>
+            </tr>
+          </thead>
+          <tbody>
+            {s["iou_0.5"].categories.map((c) => (
+              <tr key={c.key} className="border-t border-border">
+                <td className="py-1 pr-4">{c.label}</td>
+                <td className="num py-1 pr-4">{formatNumber(c.per_frame, 2)}</td>
+                <td className="num py-1">{formatNumber(loose.get(c.key)?.per_frame, 2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="num mt-3 text-xs text-text-3">{`${s["iou_0.5"].frames} labelled test frames · Source: ${at.source}`}</p>
+    </Section>
+  );
+}
+
+export const ATTRIBUTION_TITLE = "Count errors at two box-overlap thresholds";
+
 export const CALL_CENTRE_TITLE = "Waiting-time predictor on real call-centre queues";
 export const CALL_CENTRE_CAVEAT = "Phone queue, 1999, Israel; measures the prediction formula, not the cameras.";
 
@@ -276,9 +390,19 @@ export function AccuracyView({ data, error }: Readonly<{ data: AccuracyData | un
           caption={data.waiting_time ? `${new Set(data.waiting_time.per_clip.map((c) => c.clip)).size} recorded clips` : undefined}
         />
       </section>
+      {t && headlineInterval(t) ? (
+        <p data-testid="headline-interval" className="num -mt-2 text-sm text-text-2">
+          {`Mean absolute error on the held-out split: ${headlineInterval(t)}.`}
+          {t.interval_per_frame_optimistic_95
+            ? ` Per-frame interval ${range(t.interval_per_frame_optimistic_95.mae)} (${t.interval_per_frame_optimistic_95.label}).`
+            : ""}
+        </p>
+      ) : null}
       <CallCentreCard data={data} />
       <Section title="Error by clip"><ClipSection data={data} /></Section>
       <Section title="Where the count goes wrong, per labelled frame"><CountSection data={data} /></Section>
+      <AttributionCard data={data} />
+      <ComparisonsCard data={data} />
       <ChangesSection data={data} />
       <Section title="Limits of these numbers">
         {data.limits.length === 0 ? <Unavailable text="No limits listed." /> : (

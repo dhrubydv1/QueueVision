@@ -28,6 +28,9 @@ QUEUE_960 = "outputs/s6_analysis/queue_960.json"
 ERRORS_640 = "outputs/s6_analysis/errors_640.json"
 CHOSEN_ALL = "outputs/s6_sweep/chosen_all.json"
 WAIT_GLOB = "outputs/metrics/*_wait_eval.json"
+INTERVALS = "outputs/s9_eval/intervals_default.json"
+ATTRIBUTION = "outputs/s9_eval/attribution_default.json"
+COMPARISONS = "outputs/s9_eval/comparisons.json"
 CALL_CENTRE = "outputs/metrics/anonymous_bank_wait_eval.json"
 CALL_CENTRE_FILE = "anonymous_bank_wait_eval.json"  # not a camera clip: kept out of waiting_time
 CALL_CENTRE_CITATION = (
@@ -128,6 +131,26 @@ def _queue_length(outputs: Path, splits: dict[str, list[str]]) -> dict:
         raise _Missing(f"unexpected layout: missing {error}") from None
 
 
+def _categories(totals: dict, per_frame: dict) -> list[dict]:
+    categories = [
+        {"key": k, "label": label, "direction": d, "total": totals[k], "per_frame": per_frame[k]}
+        for k, label, d in CATEGORIES
+        if k in totals
+    ]
+    present = [k for k in OUTSIDE_KEYS if k in totals]
+    if present:
+        categories.append(
+            {
+                "key": "outside_zone",
+                "label": OUTSIDE_LABEL,
+                "direction": "other",
+                "total": sum(totals[k] for k in present),
+                "per_frame": round(sum(per_frame[k] for k in present), 4),
+            }
+        )
+    return categories
+
+
 def _count_errors(outputs: Path) -> dict:
     data = _load(outputs / "s6_analysis" / "errors_640.json")
     try:
@@ -135,23 +158,7 @@ def _count_errors(outputs: Path) -> dict:
         per_split = {}
         for name, key in (("all", "all_clips"), ("val", "val"), ("test", "test")):
             block = pooled[key]["iou_0.5"]["from5s"]
-            totals, per_frame = block["totals"], block["mean_per_frame"]
-            categories = [
-                {"key": k, "label": label, "direction": d, "total": totals[k], "per_frame": per_frame[k]}
-                for k, label, d in CATEGORIES
-                if k in totals
-            ]
-            present = [k for k in OUTSIDE_KEYS if k in totals]
-            if present:
-                categories.append(
-                    {
-                        "key": "outside_zone",
-                        "label": OUTSIDE_LABEL,
-                        "direction": "other",
-                        "total": sum(totals[k] for k in present),
-                        "per_frame": round(sum(per_frame[k] for k in present), 4),
-                    }
-                )
+            categories = _categories(block["totals"], block["mean_per_frame"])
             per_split[name] = {"frames": block["frames"], "categories": categories}
         return {"source": ERRORS_640, "iou": float("0.5"), "window": "from5s", "per_split": per_split}
     except (KeyError, TypeError, AttributeError) as error:
@@ -284,6 +291,154 @@ def _call_centre(outputs: Path) -> dict:
         raise _Missing(f"unexpected layout: missing {error}") from None
 
 
+def _band(block: dict, key: str) -> list[float]:
+    return [block[key]["low"], block[key]["high"]]
+
+
+def _interval_fields(block: dict, per_frame: dict) -> dict:
+    keys = ("mae", "bias", "within_one_rate")
+    return {
+        "interval_clip_bootstrap_95": {k: _band(block, k) for k in keys},
+        "n_clips": block["n_clips"],
+        "n_frames": block["n_frames"],
+        "interval_per_frame_optimistic_95": {
+            "label": per_frame["label"],
+            **{k: _band(per_frame, k) for k in keys},
+        },
+    }
+
+
+def _add_intervals(queue_length: dict, outputs: Path, missing: list[dict]) -> None:
+    """Attach clip-bootstrap intervals (and the optimistic per-frame ones) to each pooled split."""
+    try:
+        data = _load(outputs / "s9_eval" / "intervals_default.json")
+        meta = {"protocol": data["protocol"], "series": data["series"], "bootstrap": data["bootstrap"]}
+        fields = {
+            name: _interval_fields(
+                data["splits"][name]["clip_bootstrap"], data["splits"][name]["per_frame_bootstrap_optimistic"]
+            )
+            for name in ("val", "test")
+        }
+    except _Missing as error:
+        missing.append({"section": "queue_length_intervals", "path": INTERVALS, "reason": str(error)})
+        return
+    except (KeyError, TypeError, AttributeError) as error:
+        reason = f"unexpected layout: missing {error}"
+        missing.append({"section": "queue_length_intervals", "path": INTERVALS, "reason": reason})
+        return
+    queue_length["intervals_source"] = INTERVALS
+    queue_length["intervals_meta"] = meta
+    for name, extra in fields.items():
+        queue_length["pooled"][name].update(extra)
+
+
+def _attribution_iou(outputs: Path) -> dict:
+    """Error attribution at IoU 0.5 and 0.3 side by side (protocol window, raw count)."""
+    data = _load(outputs / "s9_eval" / "attribution_default.json")
+    try:
+        per_split = {}
+        for name, key in (("all", "all_clips"), ("val", "val"), ("test", "test")):
+            block = data["splits"][key]["from5s"]
+            per_split[name] = {
+                f"iou_{iou}": {
+                    "frames": block[f"iou_{iou}"]["frames"],
+                    "categories": _categories(
+                        block[f"iou_{iou}"]["totals"], block[f"iou_{iou}"]["per_frame"]
+                    ),
+                }
+                for iou in ("0.5", "0.3")
+            }
+        return {
+            "source": ATTRIBUTION,
+            "window": "from5s",
+            "iou_thresholds": [0.5, 0.3],
+            "per_split": per_split,
+        }
+    except (KeyError, TypeError, AttributeError) as error:
+        raise _Missing(f"unexpected layout: missing {error}") from None
+
+
+def _rel_source(path: str) -> str:
+    try:
+        return str(Path(path).relative_to(PROJECT_ROOT))
+    except ValueError:
+        return path
+
+
+def _comparisons(outputs: Path, missing: list[dict]) -> dict:
+    """Candidate-vs-current rows and adoption decisions, copied from comparisons.json."""
+    data = _load(outputs / "s9_eval" / "comparisons.json")
+    try:
+        configs = data["configurations"]
+        current_interval = None
+        try:
+            current_test = _load(outputs / "s9_eval" / "intervals_default.json")["splits"]["test"][
+                "clip_bootstrap"
+            ]["mae"]
+            current_interval = [current_test["low"], current_test["high"]]
+        except (_Missing, KeyError, TypeError) as error:
+            missing.append(
+                {"section": "comparisons", "path": INTERVALS, "reason": f"current interval: {error}"}
+            )
+        base = configs["A"]
+        bench = base.get("benchmark") or {}
+        rows = []
+        for r in data["rows"]:
+            cfg, decision = r["configuration"], r["decision"]
+            paired = None
+            paired_path = f"outputs/s9_eval/{cfg}/intervals_vs_A.json"
+            try:
+                pb = _load(outputs / "s9_eval" / cfg / "intervals_vs_A.json")["splits"]["test"][
+                    "paired_clip_bootstrap"
+                ]["mae"]
+                paired = [pb["low"], pb["high"]]
+            except (_Missing, KeyError, TypeError) as error:
+                missing.append(
+                    {"section": "comparisons", "path": paired_path, "reason": f"paired interval: {error}"}
+                )
+            failed = [
+                c[-1] for c in ("criterion_a", "criterion_b", "criterion_c") if not decision[c]["passes"]
+            ]
+            rows.append(
+                {
+                    "configuration": cfg,
+                    "label": configs[cfg]["label"],
+                    "metric": r["metric"],
+                    "test_mae": r["value"],
+                    "interval_clip_bootstrap_95": r["interval_clip_bootstrap_95"],
+                    "paired_delta_vs_A": r["paired_delta_vs_A"],
+                    "paired_delta_interval_95": paired,
+                    "val_mae": decision["criterion_b"]["val_mae_new"],
+                    "processing_fps": decision["criterion_c"]["processing_fps"],
+                    "clip_fps": decision["criterion_c"]["clip_fps"],
+                    "adopt": decision["adopt"],
+                    "failed_criteria": failed,
+                    "decision": decision,
+                    "source": [_rel_source(x) for x in r["source"]],
+                }
+            )
+        return {
+            "source": COMPARISONS,
+            "protocol": data["protocol"],
+            "series": data["series"],
+            "bootstrap": data["bootstrap"],
+            "notes": data["notes"],
+            "current": {
+                "configuration": "A",
+                "label": base["label"],
+                "test_mae": base["per_split_smoothed_from5s"]["test"]["mae"],
+                "test_interval_clip_bootstrap_95": current_interval,
+                "interval_source": INTERVALS,
+                "val_mae": base["per_split_smoothed_from5s"]["val"]["mae"],
+                "processing_fps": bench.get("processing_fps"),
+                "clip_fps": bench.get("clip_fps"),
+            },
+            "rows": rows,
+        }
+    except (KeyError, TypeError, AttributeError) as error:
+        raise _Missing(f"unexpected layout: missing {error}") from None
+
+
 def build_accuracy(outputs_dir: Path, splits_dir: Path, now: datetime) -> dict:
     """Build the accuracy JSON from ``outputs_dir`` and ``splits_dir``; ``now`` stamps it."""
     missing: list[dict] = []
@@ -298,6 +453,10 @@ def build_accuracy(outputs_dir: Path, splits_dir: Path, now: datetime) -> dict:
 
     queue_length = section("queue_length", QUEUE_640, lambda: _queue_length(outputs_dir, splits))
     count_errors = section("count_errors", ERRORS_640, lambda: _count_errors(outputs_dir))
+    if queue_length is not None:
+        _add_intervals(queue_length, outputs_dir, missing)
+    attribution = section("attribution_iou", ATTRIBUTION, lambda: _attribution_iou(outputs_dir))
+    comparisons = section("comparisons", COMPARISONS, lambda: _comparisons(outputs_dir, missing))
     changes = _changes(outputs_dir, missing)
     waiting = _waiting_time(outputs_dir, missing)
     call_centre = section("predictor_on_call_centre_logs", CALL_CENTRE, lambda: _call_centre(outputs_dir))
@@ -325,6 +484,8 @@ def build_accuracy(outputs_dir: Path, splits_dir: Path, now: datetime) -> dict:
         "changes_not_adopted": changes,
         "waiting_time": waiting,
         "predictor_on_call_centre_logs": call_centre,
+        "attribution_iou": attribution,
+        "comparisons": comparisons,
         "limits": limits,
     }
 

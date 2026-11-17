@@ -170,3 +170,78 @@ describe("AccuracyView", () => {
     });
   });
 });
+
+describe("AccuracyView evidence additions", () => {
+  const band = (lo: number, hi: number) => [lo, hi];
+  const withIntervals = {
+    ...data,
+    queue_length: {
+      ...data.queue_length!,
+      pooled: {
+        ...data.queue_length!.pooled,
+        test: {
+          ...pooled, n_clips: 3, n_frames: 99,
+          interval_clip_bootstrap_95: { mae: band(0.51, 2.49), bias: band(0, 1), within_one_rate: band(0, 1) },
+          interval_per_frame_optimistic_95: { label: "optimistic label", mae: band(1.01, 1.49), bias: band(0, 1), within_one_rate: band(0, 1) },
+        },
+      },
+    },
+    attribution_iou: {
+      source: "attr.json", window: "from5s",
+      per_split: Object.fromEntries(["all", "val", "test"].map((k) => [k, {
+        "iou_0.5": { frames: 12, categories: [cat("k1", "over", 0.44)] },
+        "iou_0.3": { frames: 12, categories: [cat("k1", "over", 0.22)] },
+      }])),
+    },
+    comparisons: {
+      source: "cmp.json", protocol: "protocol vX", series: "s", bootstrap: "b", notes: [],
+      current: { configuration: "A", label: "Current thing", test_mae: 1.5, test_interval_clip_bootstrap_95: band(1, 2), val_mae: 1.1, processing_fps: 31.94, clip_fps: 30 },
+      rows: [
+        { configuration: "B", label: "Candidate B", metric: "m", test_mae: 1.25, interval_clip_bootstrap_95: band(0.75, 1.75),
+          paired_delta_vs_A: -0.25, paired_delta_interval_95: band(-0.5, 0.1), val_mae: 0.95, processing_fps: 20.5, clip_fps: 30,
+          adopt: false, failed_criteria: ["a", "c"], source: ["x"] },
+        { configuration: "C", label: "Candidate C", metric: "m", test_mae: 1.0, interval_clip_bootstrap_95: band(0.5, 1.5),
+          paired_delta_vs_A: -0.5, paired_delta_interval_95: null, val_mae: 0.9, processing_fps: 31, clip_fps: 30,
+          adopt: true, failed_criteria: [], source: ["y"] },
+      ],
+    },
+  } as unknown as AccuracyData;
+
+  it("builds the headline sentence only from the JSON values", () => {
+    render(<AccuracyView data={withIntervals} error={null} />);
+    const line = screen.getByTestId("headline-interval");
+    expect(line).toHaveTextContent("1.23 people, 95% interval 0.51\u20132.49, 3 clips");
+    expect(line).toHaveTextContent("Per-frame interval 1.01\u20131.49 (optimistic label)");
+  });
+  it("shows no interval text when intervals are missing", () => {
+    render(<AccuracyView data={data} error={null} />);
+    expect(screen.queryByTestId("headline-interval")).toBeNull();
+    expect(screen.getByText("1.23")).toBeInTheDocument();
+  });
+  it("renders the comparison table with decisions and failed criteria", () => {
+    render(<AccuracyView data={withIntervals} error={null} />);
+    const rows = within(screen.getByTestId("comparison-table")).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toHaveTextContent("1.50 [1.00\u20132.00]");
+    expect(rows[0]).toHaveTextContent("31.9 of 30");
+    expect(rows[1]).toHaveTextContent("1.25 [0.75\u20131.75]");
+    expect(rows[1]).toHaveTextContent("\u22120.25 [\u22120.50\u20130.10]".replace("\u22120.50", "-0.50"));
+    expect(rows[1]).toHaveTextContent("20.5 of 30");
+    expect(rows[1]).toHaveTextContent("Not adopted");
+    expect(rows[1]).toHaveTextContent("(a) test error not clearly lower");
+    expect(rows[1]).toHaveTextContent("(c) slower than real time");
+    expect(rows[2]).toHaveTextContent(/Adopted$/);
+    expect(screen.getByTestId("comparison-caption")).toHaveTextContent("With 1 validation and 1 test clips these intervals are wide. Adoption follows the rule in protocol vX.");
+  });
+  it("shows both IoU thresholds side by side", () => {
+    render(<AccuracyView data={withIntervals} error={null} />);
+    expect(within(screen.getByTestId("attribution-table")).getByRole("row", { name: /Label k1/ })).toHaveTextContent("0.440.22");
+  });
+  it("reports missing comparisons from missing_sources and hides absent keys", () => {
+    const missing = { ...data, comparisons: null, attribution_iou: null,
+      missing_sources: [{ section: "comparisons", path: "p.json", reason: "file not found" }] } as unknown as AccuracyData;
+    render(<AccuracyView data={missing} error={null} />);
+    expect(screen.getByText(/file not found \(p\.json\)/)).toBeInTheDocument();
+    expect(screen.queryByTestId("comparison-table")).toBeNull();
+  });
+});

@@ -20,8 +20,23 @@ export interface QueueClipMetrics extends QueueMetrics {
   split: "val" | "test" | null;
 }
 
+/** [low, high] of a 95 % bootstrap interval. */
+export type Band = [number, number];
+
+export interface MetricBands {
+  mae: Band;
+  bias: Band;
+  within_one_rate: Band;
+}
+
 export interface QueuePooledMetrics extends QueueMetrics {
   clips: string[];
+  /** Absent when outputs/s9_eval/intervals_default.json was missing at export time. */
+  interval_clip_bootstrap_95?: MetricBands;
+  n_clips?: number;
+  n_frames?: number;
+  /** Ignores within-clip correlation, so narrower than the truth; always labelled as such. */
+  interval_per_frame_optimistic_95?: MetricBands & { label: string };
 }
 
 export interface QueueLengthSection {
@@ -29,6 +44,7 @@ export interface QueueLengthSection {
   protocol: { series: string; window: string; tolerance_seconds: number; from_seconds: number };
   per_clip: QueueClipMetrics[];
   pooled: { val: QueuePooledMetrics; test: QueuePooledMetrics };
+  intervals_source?: string;
 }
 
 export type ErrorDirection = "correct" | "over" | "under" | "other";
@@ -51,6 +67,59 @@ export interface CountErrorsSection {
   iou: number;
   window: string;
   per_split: { all: CountErrorSplit; val: CountErrorSplit; test: CountErrorSplit };
+}
+
+export interface AttributionIouBlock {
+  frames: number;
+  categories: CountErrorCategory[];
+}
+
+/** Error attribution at two IoU thresholds, side by side (protocol window, raw count). */
+export interface AttributionIouSection {
+  source: string;
+  window: string;
+  per_split: Record<"all" | "val" | "test", { "iou_0.5": AttributionIouBlock; "iou_0.3": AttributionIouBlock }>;
+}
+
+export type CriterionLetter = "a" | "b" | "c";
+
+export interface ComparisonRow {
+  configuration: string;
+  label: string;
+  metric: string;
+  test_mae: number;
+  interval_clip_bootstrap_95: Band;
+  paired_delta_vs_A: number;
+  /** null when the paired file was missing (see missing_sources). */
+  paired_delta_interval_95: Band | null;
+  val_mae: number;
+  processing_fps: number;
+  clip_fps: number;
+  adopt: boolean;
+  failed_criteria: CriterionLetter[];
+  source: string[];
+}
+
+/** Candidate configurations against the current default, decided by the committed protocol. */
+export interface ComparisonsSection {
+  source: string;
+  protocol: string;
+  series: string;
+  bootstrap: string;
+  notes: string[];
+  current: {
+    configuration: string;
+    label: string;
+    test_mae: number;
+    /** null when intervals_default.json was missing (see missing_sources). */
+    test_interval_clip_bootstrap_95: Band | null;
+    interval_source?: string;
+    val_mae: number;
+    /** From the current default's benchmark; null/absent when not exported. */
+    processing_fps?: number | null;
+    clip_fps?: number | null;
+  };
+  rows: ComparisonRow[];
 }
 
 export interface ChangeNotAdopted {
@@ -150,5 +219,8 @@ export interface AccuracyData {
   waiting_time: WaitingTimeSection | null;
   /** Absent in files exported before this section existed. */
   predictor_on_call_centre_logs?: PredictorOnCallCentreLogs | null;
+  /** Absent in files exported before these sections existed. */
+  attribution_iou?: AttributionIouSection | null;
+  comparisons?: ComparisonsSection | null;
   limits: string[];
 }

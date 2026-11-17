@@ -81,7 +81,88 @@ def write(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data))
 
 
-def make_sources(tmp_path: Path, *, errors: bool = True) -> tuple[Path, Path]:
+def band(point: float, low: float, high: float) -> dict:
+    return {"point": point, "low": low, "high": high}
+
+
+def interval_split(n_clips: int, n_frames: int) -> dict:
+    def block(unit: str, extra: dict) -> dict:
+        return {
+            "unit": unit,
+            "n_clips": n_clips,
+            "n_frames": n_frames,
+            "mae": band(1.5, 1.0, 2.0),
+            "bias": band(0.5, -0.5, 1.0),
+            "within_one_rate": band(0.6, 0.4, 0.8),
+            **extra,
+        }
+
+    return {
+        "clips": ["cad_a"],
+        "clip_bootstrap": block("clip", {}),
+        "per_frame_bootstrap_optimistic": block("frame", {"label": "optimistic (ignores correlation)"}),
+    }
+
+
+def intervals_file() -> dict:
+    return {
+        "protocol": "docs/evaluation_protocol.md v1",
+        "series": "smoothed_from5s",
+        "bootstrap": {"n_resamples": 77, "seed": 5},
+        "splits": {"val": interval_split(1, 7), "test": interval_split(2, 9)},
+    }
+
+
+def attribution_file() -> dict:
+    cat = errors_file()["variants"]["as_configured"]["pooled"]["test"]["iou_0.5"]["from5s"]
+    block = {"frames": cat["frames"], "totals": cat["totals"], "per_frame": cat["mean_per_frame"]}
+    window = {"iou_0.5": block, "iou_0.3": {**block, "frames": 11}}
+    return {
+        "splits": {"all_clips": {"from5s": window}, "val": {"from5s": window}, "test": {"from5s": window}}
+    }
+
+
+def comparison_row(cfg: str, adopt: bool, a_passes: bool) -> dict:
+    return {
+        "configuration": cfg,
+        "metric": "test smoothed queue-length MAE (from 5 s)",
+        "value": 1.4,
+        "interval_clip_bootstrap_95": [1.1, 1.8],
+        "paired_delta_vs_A": -0.2,
+        "decision": {
+            "adopt": adopt,
+            "criterion_a": {"passes": a_passes},
+            "criterion_b": {"passes": True, "val_mae_new": 0.8, "val_mae_A": 1.2},
+            "criterion_c": {"passes": False, "processing_fps": 20.5, "clip_fps": 30.0},
+        },
+        "source": ["/elsewhere/B/queue_640.json"],
+    }
+
+
+def comparisons_file() -> dict:
+    split = {"mae": 1.6, "matched": 9}
+    return {
+        "protocol": "docs/evaluation_protocol.md v1",
+        "series": "smoothed",
+        "bootstrap": "clip-level",
+        "notes": ["note"],
+        "configurations": {
+            "A": {
+                "label": "current",
+                "per_split_smoothed_from5s": {"val": {"mae": 1.2}, "test": split},
+                "benchmark": {"processing_fps": 31.9, "clip_fps": 30.0},
+            },
+            "B": {"label": "candidate B"},
+        },
+        "rows": [comparison_row("B", False, False)],
+    }
+
+
+def paired_file() -> dict:
+    return {"splits": {"test": {"paired_clip_bootstrap": {"mae": {"low": -0.4, "high": 0.2}}}}}
+
+
+def make_sources(tmp_path: Path, *, errors: bool = True, s9: bool = True) -> tuple[Path, Path]:
     outputs, splits = tmp_path / "outputs", tmp_path / "splits"
     splits.mkdir()
     (splits / "val.txt").write_text("# comment\ncad_a\n")
@@ -91,6 +172,11 @@ def make_sources(tmp_path: Path, *, errors: bool = True) -> tuple[Path, Path]:
     if errors:
         write(outputs / "s6_analysis" / "errors_640.json", errors_file())
     write(outputs / "s6_sweep" / "chosen_all.json", chosen_file())
+    if s9:
+        write(outputs / "s9_eval" / "intervals_default.json", intervals_file())
+        write(outputs / "s9_eval" / "attribution_default.json", attribution_file())
+        write(outputs / "s9_eval" / "comparisons.json", comparisons_file())
+        write(outputs / "s9_eval" / "B" / "intervals_vs_A.json", paired_file())
     return outputs, splits
 
 
@@ -413,3 +499,66 @@ def test_call_centre_section_served_by_route(tmp_path: Path) -> None:
         settings.accuracy_path.write_text(json.dumps(payload))
         body = client.get("/api/accuracy").json()
     assert body["predictor_on_call_centre_logs"]["methods"]["predictor"]["mae_s"]["value"] == 90.0
+
+
+def test_intervals_beside_headline(tmp_path: Path) -> None:
+    outputs, splits = make_sources(tmp_path)
+    ql = build_accuracy(outputs, splits, NOW)["queue_length"]
+    test = ql["pooled"]["test"]
+    assert test["mae"] == 1.6193  # existing key untouched
+    assert test["interval_clip_bootstrap_95"]["mae"] == [1.0, 2.0]
+    assert (test["n_clips"], test["n_frames"]) == (2, 9)
+    assert test["interval_per_frame_optimistic_95"]["label"].startswith("optimistic")
+    assert ql["pooled"]["val"]["n_clips"] == 1
+    assert ql["intervals_source"] == "outputs/s9_eval/intervals_default.json"
+
+
+def test_attribution_both_thresholds(tmp_path: Path) -> None:
+    outputs, splits = make_sources(tmp_path)
+    attr = build_accuracy(outputs, splits, NOW)["attribution_iou"]
+    assert attr["source"] == "outputs/s9_eval/attribution_default.json"
+    test = attr["per_split"]["test"]
+    assert test["iou_0.5"]["frames"] == 10 and test["iou_0.3"]["frames"] == 11
+    assert any(c["key"] == "outside_zone" for c in test["iou_0.3"]["categories"])
+
+
+def test_comparisons_rows_and_decision(tmp_path: Path) -> None:
+    outputs, splits = make_sources(tmp_path)
+    cmp = build_accuracy(outputs, splits, NOW)["comparisons"]
+    assert cmp["protocol"] == "docs/evaluation_protocol.md v1"
+    assert cmp["current"]["test_mae"] == 1.6 and cmp["current"]["val_mae"] == 1.2
+    (row,) = cmp["rows"]
+    assert row["label"] == "candidate B" and row["adopt"] is False
+    assert row["failed_criteria"] == ["a", "c"]
+    assert row["paired_delta_interval_95"] == [-0.4, 0.2]
+    assert row["val_mae"] == 0.8 and row["processing_fps"] == 20.5
+    assert cmp["current"]["processing_fps"] == 31.9 and cmp["current"]["clip_fps"] == 30.0
+    assert cmp["current"]["test_interval_clip_bootstrap_95"] == [1.0, 2.0]
+
+
+def test_new_sections_missing_reported(tmp_path: Path) -> None:
+    outputs, splits = make_sources(tmp_path, s9=False)
+    out = build_accuracy(outputs, splits, NOW)
+    assert out["attribution_iou"] is None and out["comparisons"] is None
+    assert "interval_clip_bootstrap_95" not in out["queue_length"]["pooled"]["test"]
+    sections = {m["section"] for m in out["missing_sources"]}
+    assert {"queue_length_intervals", "attribution_iou", "comparisons"} <= sections
+
+
+def test_missing_paired_interval_reported(tmp_path: Path) -> None:
+    outputs, splits = make_sources(tmp_path)
+    (outputs / "s9_eval" / "B" / "intervals_vs_A.json").unlink()
+    out = build_accuracy(outputs, splits, NOW)
+    assert out["comparisons"]["rows"][0]["paired_delta_interval_95"] is None
+    assert any(m["path"] == "outputs/s9_eval/B/intervals_vs_A.json" for m in out["missing_sources"])
+
+
+def test_missing_current_interval_keeps_comparisons(tmp_path: Path) -> None:
+    outputs, splits = make_sources(tmp_path)
+    (outputs / "s9_eval" / "intervals_default.json").unlink()
+    out = build_accuracy(outputs, splits, NOW)
+    cmp = out["comparisons"]
+    assert cmp is not None and len(cmp["rows"]) == 1
+    assert cmp["current"]["test_interval_clip_bootstrap_95"] is None
+    cmp_missing = [m for m in out["missing_sources"] if m["section"] == "comparisons"]
+    assert [m["path"] for m in cmp_missing] == ["outputs/s9_eval/intervals_default.json"]

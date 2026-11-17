@@ -5,6 +5,7 @@ ID extraction, thresholds and reset logic. ``integration`` tests run real
 YOLO11n + ByteTrack.
 """
 
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -24,6 +25,8 @@ class FakeDetector:
     """MOCKED detector returning queued results and recording track() calls."""
 
     confidence = 0.35
+    model_path = Path("yolo11n.pt")
+    device = "mps"
 
     def __init__(self, results: list[Any]) -> None:
         self.results = list(results)
@@ -142,3 +145,145 @@ def test_real_tracker_uses_installed_bytetrack_defaults(real_tracker: PersonTrac
     resolved = real_tracker.resolved_config
     assert resolved["tracker_type"] == "bytetrack"
     assert resolved["track_high_thresh"] > real_tracker.settings.input_confidence
+
+
+BOTSORT_DEFAULTS = {
+    "tracker_type": "botsort",
+    "track_high_thresh": 0.25,
+    "track_low_thresh": 0.1,
+    "new_track_thresh": 0.25,
+    "track_buffer": 30,
+    "match_thresh": 0.8,
+    "fuse_score": True,
+    "gmc_method": "sparseOptFlow",
+    "proximity_thresh": 0.5,
+    "appearance_thresh": 0.8,
+    "with_reid": False,
+    "model": "auto",
+}
+SHARED_KEYS = (
+    "new_track_thresh",
+    "track_buffer",
+    "track_high_thresh",
+    "track_low_thresh",
+    "match_thresh",
+    "fuse_score",
+)
+BOTSORT_ONLY_KEYS = {"gmc_method", "proximity_thresh", "appearance_thresh", "with_reid", "model"}
+
+
+def test_botsort_shares_bytetrack_resolved_values_for_shared_keys() -> None:
+    kwargs = {"new_track_confidence": 0.4, "buffer_seconds": 2.0}
+    byte = resolve_tracker_config(TrackerSettings(**kwargs), 15.0, BYTETRACK_DEFAULTS)
+    bot = resolve_tracker_config(TrackerSettings(tracker_type="botsort", **kwargs), 15.0, BOTSORT_DEFAULTS)
+    for key in SHARED_KEYS:
+        assert bot[key] == byte[key], key
+    assert bot["new_track_thresh"] == 0.4 and bot["track_buffer"] == 30
+    assert set(bot) - set(byte) == BOTSORT_ONLY_KEYS
+    assert {k for k in byte if byte[k] != bot[k]} == {"tracker_type"}
+    # Untouched BoT-SORT keys stay at the bundled values.
+    assert bot["gmc_method"] == "sparseOptFlow" and bot["with_reid"] is False and bot["model"] == "auto"
+
+
+def test_botsort_reid_flag_and_gmc_override_only_touch_their_keys() -> None:
+    plain = resolve_tracker_config(TrackerSettings(tracker_type="botsort"), 30.0, BOTSORT_DEFAULTS)
+    reid = resolve_tracker_config(TrackerSettings(tracker_type="botsort", reid=True), 30.0, BOTSORT_DEFAULTS)
+    assert {k for k in plain if plain[k] != reid[k]} == {"with_reid"}
+    assert reid["with_reid"] is True and reid["model"] == "auto"
+    nogmc = resolve_tracker_config(
+        TrackerSettings(tracker_type="botsort", gmc_method="none"), 30.0, BOTSORT_DEFAULTS
+    )
+    assert {k for k in plain if plain[k] != nogmc[k]} == {"gmc_method"}
+
+
+def test_default_tracker_is_unchanged_bytetrack_without_reid() -> None:
+    settings = TrackerSettings()
+    assert settings.tracker_type == "bytetrack" and settings.reid is False and settings.gmc_method is None
+    resolved = resolve_tracker_config(settings, 30.0, BYTETRACK_DEFAULTS)
+    assert set(resolved) == set(BYTETRACK_DEFAULTS)  # no BoT-SORT keys leak in
+
+
+def test_reid_and_gmc_rejected_with_bytetrack_and_unknown_tracker() -> None:
+    with pytest.raises(ValueError):
+        TrackerSettings(reid=True)
+    with pytest.raises(ValueError):
+        TrackerSettings(gmc_method="none")
+    with pytest.raises(ValueError):
+        TrackerSettings(tracker_type="deepsort")
+
+
+def test_describe_reports_tracker_type_and_reid() -> None:
+    byte, _ = make_tracker([])
+    assert byte.describe()["type"] == "bytetrack" and "reid" not in byte.describe()
+    detector = FakeDetector([])
+    bot = PersonTracker(
+        detector, TrackerSettings(tracker_type="botsort", reid=True), base_config=dict(BOTSORT_DEFAULTS)
+    )
+    assert bot.describe()["type"] == "botsort" and bot.describe()["reid"] is True
+
+
+def test_person_tracker_loads_the_bundled_yaml_of_its_tracker_type(monkeypatch) -> None:
+    loaded: list[str] = []
+
+    def fake_load(name: str = "bytetrack.yaml") -> dict[str, Any]:
+        loaded.append(name)
+        return dict(BOTSORT_DEFAULTS if name == "botsort.yaml" else BYTETRACK_DEFAULTS)
+
+    monkeypatch.setattr("ai_engine.tracking.tracker.load_base_tracker_config", fake_load)
+    PersonTracker(FakeDetector([]))
+    PersonTracker(FakeDetector([]), TrackerSettings(tracker_type="botsort"))
+    assert loaded == ["bytetrack.yaml", "botsort.yaml"]
+
+
+def test_cli_rejects_reid_with_bytetrack_and_defaults_are_off(capsys) -> None:
+    from ai_engine.run_tracking import parse_arguments
+
+    args = parse_arguments(["--video", "x.mp4"])
+    assert (args.tracker, args.reid) == ("bytetrack", "off")
+    assert parse_arguments(["--video", "x.mp4", "--tracker", "botsort", "--reid", "on"]).reid == "on"
+    with pytest.raises(SystemExit):
+        parse_arguments(["--video", "x.mp4", "--reid", "on"])
+    assert "requires --tracker botsort" in capsys.readouterr().err
+
+
+def test_reid_rejected_for_coreml_detector() -> None:
+    detector = FakeDetector([])
+    detector.model_path = Path("yolo11n.mlpackage")
+    detector.device = "coreml"
+    with pytest.raises(ValueError, match=r"\.pt"):
+        PersonTracker(
+            detector, TrackerSettings(tracker_type="botsort", reid=True), base_config=dict(BOTSORT_DEFAULTS)
+        )
+    # BoT-SORT without ReID is fine with CoreML.
+    PersonTracker(detector, TrackerSettings(tracker_type="botsort"), base_config=dict(BOTSORT_DEFAULTS))
+
+
+def test_cli_rejects_reid_with_coreml_model(capsys) -> None:
+    from ai_engine.run_tracking import parse_arguments
+
+    argv = ["--video", "x.mp4", "--tracker", "botsort", "--reid", "on", "--model"]
+    with pytest.raises(SystemExit):
+        parse_arguments([*argv, "yolo11n.mlpackage"])
+    assert ".pt" in capsys.readouterr().err
+    assert parse_arguments([*argv, "yolo11n.pt"]).reid == "on"
+
+
+def test_benchmark_rejects_reid_with_coreml_model(capsys) -> None:
+    from scripts.benchmark import main as benchmark_main
+
+    with pytest.raises(SystemExit):
+        benchmark_main(["--video", "x.mp4", "--tracker", "botsort", "--reid", "on", "--model", "m.mlpackage"])
+    assert ".pt" in capsys.readouterr().err
+
+
+def test_default_describe_is_exactly_the_pre_change_dict() -> None:
+    tracker, _ = make_tracker([])
+    resolved = resolve_tracker_config(tracker.settings, 30.0, BYTETRACK_DEFAULTS)
+    assert tracker.describe() == {
+        "type": "bytetrack",
+        "input_confidence": 0.1,
+        "new_track_confidence": 0.35,
+        "buffer_seconds": tracker.settings.buffer_seconds,
+        "effective_fps": 30.0,
+        "resolved": resolved,
+    }

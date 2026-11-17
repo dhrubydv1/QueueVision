@@ -15,6 +15,7 @@ from ai_engine import config
 from ai_engine.detection.detector import PersonDetector, parse_person_boxes
 from ai_engine.detection.types import PersonDetection
 
+TRACKER_TYPES = ("bytetrack", "botsort")
 RUNTIME_DIR = Path(tempfile.gettempdir()) / "queuevision" / "trackers"
 
 
@@ -37,13 +38,25 @@ class TrackerSettings:
       (ByteTrack's ``new_track_thresh``).
     * ``buffer_seconds``: how long a lost track is kept, converted to
       processed frames for ``track_buffer``.
+    * ``tracker_type``: ``bytetrack`` (default) or ``botsort``. BoT-SORT shares the
+      keys above and adds its own (GMC, ReID); ``reid`` switches ``with_reid`` on
+      with ``model: auto`` (detector features) and is only valid with BoT-SORT.
     """
 
     new_track_confidence: float = config.CONFIDENCE
     input_confidence: float = config.TRACKER_INPUT_CONFIDENCE
     buffer_seconds: float = config.TRACK_BUFFER_SECONDS
+    tracker_type: str = "bytetrack"
+    reid: bool = False
+    gmc_method: str | None = None  # BoT-SORT only; None keeps Ultralytics' bundled default
 
     def __post_init__(self) -> None:
+        if self.tracker_type not in TRACKER_TYPES:
+            raise ValueError(f"tracker_type must be one of {TRACKER_TYPES}, got {self.tracker_type!r}")
+        if self.reid and self.tracker_type != "botsort":
+            raise ValueError("reid requires tracker_type 'botsort'")
+        if self.gmc_method is not None and self.tracker_type != "botsort":
+            raise ValueError("gmc_method requires tracker_type 'botsort'")
         for name in ("new_track_confidence", "input_confidence"):
             value = getattr(self, name)
             if not 0.0 < value <= 1.0:
@@ -68,6 +81,11 @@ def resolve_tracker_config(
     resolved = dict(base if base is not None else load_base_tracker_config())
     resolved["new_track_thresh"] = settings.new_track_confidence
     resolved["track_buffer"] = max(1, round(settings.buffer_seconds * effective_fps))
+    if settings.tracker_type == "botsort":
+        resolved["with_reid"] = settings.reid
+        resolved["model"] = "auto"
+        if settings.gmc_method is not None:
+            resolved["gmc_method"] = settings.gmc_method
     return resolved
 
 
@@ -99,9 +117,24 @@ class PersonTracker:
         base_config: dict[str, Any] | None = None,
     ) -> None:
         self.detector = detector
+        if settings is not None and settings.reid:
+            model_path = Path(getattr(detector, "model_path", ""))
+            if model_path.suffix.lower() != ".pt" or getattr(detector, "device", None) == "coreml":
+                raise ValueError(
+                    "reid with model 'auto' needs a PyTorch .pt detector (CoreML models make "
+                    f"Ultralytics download a separate classifier encoder); got {model_path}"
+                )
         self.settings = settings or TrackerSettings(new_track_confidence=detector.confidence)
         # Ultralytics' bytetrack.yaml unless given (tests pass a dict to stay model-free).
-        self._base_config = base_config if base_config is not None else load_base_tracker_config()
+        self._base_config = (
+            base_config
+            if base_config is not None
+            else load_base_tracker_config(
+                config.TRACKER_CONFIG
+                if self.settings.tracker_type == "bytetrack"
+                else f"{self.settings.tracker_type}.yaml"
+            )
+        )
         self._needs_reset = True
         self.configure(effective_fps)
 
@@ -154,7 +187,7 @@ class PersonTracker:
 
     def describe(self) -> dict[str, Any]:
         """Tracker settings for reports."""
-        return {
+        info = {
             "type": self.resolved_config.get("tracker_type", "bytetrack"),
             "input_confidence": self.settings.input_confidence,
             "new_track_confidence": self.settings.new_track_confidence,
@@ -162,3 +195,6 @@ class PersonTracker:
             "effective_fps": round(self.effective_fps, 3),
             "resolved": self.resolved_config,
         }
+        if info["type"] == "botsort":  # ByteTrack's report block stays exactly as before
+            info["reid"] = bool(self.resolved_config.get("with_reid", False))
+        return info
