@@ -79,9 +79,26 @@ Before running any comparison, add `docs/evaluation_protocol.md` and commit it o
 - Extend `scripts/export_accuracy.py` and `/api/accuracy` with the intervals, the two-threshold attribution, and a `comparisons` section (configuration, metric, value, interval, decision), each with its source file. The Accuracy page shows intervals beside the headline numbers ("1.62 people, 95% interval a–b, 4 clips") and a comparison table. Vitest for the new parts.
 - Results and the decisions go in `docs/testing_report.md` with method, sample sizes and limits.
 
-## SESSIONS 3–4
+## SESSION 3 — PRIVACY AND REAL-TIME PERFORMANCE (`fix/privacy-performance`)
 
-Session 3 (`frame` privacy mode; pacing slowdown experiments) and session 4 (labelling page, scoring, predicted-vs-actual) are recorded in full from the team's prompt when each starts.
+### 3a. Blur that does not depend on detection
+
+Problem: heads are blurred from the detector's boxes, so a person the detector misses is shown unblurred.
+
+- Add a privacy mode: `boxes` (current behaviour: blur the top of each person box) and `frame` (blur or pixelate the whole frame first, then draw the zone, boxes, IDs and labels on top). Configurable per run (`privacy_mode` upload option and CLI flag) and per output (saved video, preview).
+- Default: `frame` for previews (`preview.jpg`, `preview.mjpg`, and later live cameras); saved videos keep `boxes` unless chosen otherwise. Document the trade-off in `docs/privacy.md`.
+- Tests: in `frame` mode, a synthetic frame with a "person" the detector did not report is blurred; overlays stay sharp; `boxes` mode unchanged.
+
+### 3b. The idle slowdown when pacing
+
+Sprint 8 measured that real-time pacing at stride 3 makes each frame's detector update about 40% slower (median about 45 ms vs 33 ms), inferred to be the machine slowing down while idle between frames; the cause was not measured.
+
+- Measure it with `scripts/measure_realtime.py --stages`, 3 repeats each, alternating order: (a) as now, (b) the whole run under macOS `caffeinate -i`, (c) a short MPS warm-up (one dummy inference) just before each paced frame, (d) a shorter sleep followed by a brief spin for the last ~2 ms. Report wall time, waited time, non-wait time and per-frame update median for each, with min/median/max.
+- Adopt a product change only if it removes most of the gap without raising non-wait CPU use much (report CPU time from `resource.getrusage` for each). Otherwise document the findings and leave the code as is. Write down what Sprint 8's live cameras should expect.
+
+## SESSION 4
+
+Session 4 (labelling page, scoring, predicted-vs-actual) is recorded in full from the team's prompt when it starts.
 
 ## AFTER THIS PROMPT
 Continue with Sprint 8 session 2 (live cameras), told about: the router layout (1a), the reusable per-frame processor (1b), the migration list (1c), the `frame` privacy mode (3a), and the pacing findings (3b).
