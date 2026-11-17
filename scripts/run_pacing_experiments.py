@@ -145,6 +145,9 @@ def main(argv: list[str] | None = None) -> int:
         "update median <= fast + gap/3 and CPU median <= 1.10 x CPU median (a); "
         "lowest CPU among passing wins",
         "configs": DESCRIPTION,
+        "git_commit": subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True
+        ).stdout.strip(),
         "order": [o["tag"] for o in order],
         "pause_between_runs_s": args.pause,
         "per_config": summary,

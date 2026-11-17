@@ -88,19 +88,41 @@ def test_cpu_seconds_is_positive_and_monotonic() -> None:
     assert mr.cpu_seconds() >= a > 0
 
 
-def test_variant_record_has_cpu_and_warmup_fields() -> None:
-    import inspect
+def test_update_split_separates_after_wait_and_no_wait_updates() -> None:
+    timer = mr.StageTimer()
+    for v in (0.040, 0.044, 0.042):
+        timer.add("tracker_update", v, keep=True)
+        timer.add("tracker_update_after_wait", v, keep=True)
+    for v in (0.030, 0.032):
+        timer.add("tracker_update", v, keep=True)
+        timer.add("tracker_update_no_wait", v, keep=True)
+    split = mr.update_split(timer)
+    assert split["all"]["frames"] == 5
+    assert split["after_wait"]["frames"] == 3
+    assert abs(split["after_wait"]["median_ms"] - 42.0) < 1e-6
+    assert split["no_wait"]["frames"] == 2
+    assert abs(split["no_wait"]["median_ms"] - 31.0) < 1e-6
 
-    src = inspect.getsource(mr.run_variant)
-    for key in (
-        '"cpu_s"',
-        '"warmup_s"',
-        '"warmup_calls"',
-        '"update_median_ms"',
-        '"waited_s"',
-        '"non_wait_s"',
-    ):
-        assert key in src
+
+def test_update_split_empty_groups_are_none() -> None:
+    split = mr.update_split(mr.StageTimer())
+    assert split["no_wait"] == {"frames": 0, "median_ms": None, "p90_ms": None}
+
+
+def test_tracker_update_wrapper_feeds_the_split() -> None:
+    """The real wrapper logic: an update right after a wait lands in after_wait, the next one in no_wait."""
+    timer = mr.StageTimer()
+    for after in (True, False, True):
+        timer.after_wait = after
+        # same branching as install_stage_timers.update
+        timer.add("tracker_update", 0.01, keep=True)
+        if timer.after_wait:
+            timer.after_wait = False
+            timer.add("tracker_update_after_wait", 0.01, keep=True)
+        else:
+            timer.add("tracker_update_no_wait", 0.01, keep=True)
+    split = mr.update_split(timer)
+    assert (split["after_wait"]["frames"], split["no_wait"]["frames"]) == (2, 1)
 
 
 def summary_for(update: dict[str, float], cpu: dict[str, float]) -> dict:

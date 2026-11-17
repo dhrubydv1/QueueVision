@@ -172,6 +172,23 @@ def make_variant_wait(variant, sleep, clock, warmup=None, tail_s: float = SPIN_T
     return wait
 
 
+def update_split(timer: StageTimer) -> dict:
+    """Update-time medians (ms) and frame counts overall, after a pacing wait, and with no wait before it."""
+    out = {}
+    for key, name in (
+        ("all", "tracker_update"),
+        ("after_wait", "tracker_update_after_wait"),
+        ("no_wait", "tracker_update_no_wait"),
+    ):
+        samples = timer.samples.get(name, [])
+        out[key] = {
+            "frames": len(samples),
+            "median_ms": 1000 * statistics.median(samples) if samples else None,
+            "p90_ms": 1000 * percentile(samples, 0.9) if samples else None,
+        }
+    return out
+
+
 def torch_warmup_for(get_tracker):
     """One raw forward pass of the detector network on a blank frame (no tracker state touched)."""
 
@@ -258,6 +275,7 @@ def run_variant(args, fps: float, count: int) -> int:
                         "frames": len(updates),
                         "update_median_ms": 1000 * statistics.median(updates),
                         "update_p90_ms": 1000 * percentile(updates, 0.9),
+                        "update_split": update_split(timer),
                     }
                 )
                 print(json.dumps(runs[-1]), flush=True)
