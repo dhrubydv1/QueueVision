@@ -27,7 +27,7 @@ from ai_engine.visualization.metrics_overlay import (
     predicted_wait_text,
     service_rate_text,
 )
-from ai_engine.visualization.privacy import DEFAULT_HEAD_FRACTION, blur_heads
+from ai_engine.visualization.privacy import DEFAULT_HEAD_FRACTION, PRIVACY_MODES, blur_heads, pixelate_frame
 
 
 def service_point_pixels(camera: CameraConfig, frame_size: tuple[int, int]) -> np.ndarray | None:
@@ -58,6 +58,7 @@ class FrameProcessor:
         camera: CameraConfig | None = None,
         *,
         blur_heads: bool = False,
+        privacy_mode: str | None = None,
         head_fraction: float = DEFAULT_HEAD_FRACTION,
         panel_position: str = "top-left",
         stitching: bool | None = None,
@@ -68,7 +69,14 @@ class FrameProcessor:
             raise ValueError(f"panel_position must be one of {PANEL_POSITIONS}")
         self.tracker = tracker
         self.camera = camera
-        self.blur_heads = blur_heads
+        if privacy_mode is not None and privacy_mode not in PRIVACY_MODES:
+            raise ValueError(f"privacy_mode must be one of {PRIVACY_MODES}")
+        if blur_heads and privacy_mode in ("none", "frame"):
+            raise ValueError(f"blur_heads=True conflicts with privacy_mode={privacy_mode!r}")
+        # ``blur_heads=True`` is the legacy spelling of ``privacy_mode="boxes"``.
+        self.privacy_mode = "boxes" if blur_heads else (privacy_mode or "none")
+        #: Undrawn copy of the last processed frame; only set when ``process(keep_clean=True)``.
+        self.clean_frame: np.ndarray | None = None
         self.head_fraction = head_fraction
         self.panel_position = panel_position
         self.analyzer = (
@@ -92,6 +100,11 @@ class FrameProcessor:
         self._zone_px = self.analyzer.zone.to_pixels(frame_size) if self.analyzer else None
         self._service_px = service_point_pixels(self.camera, frame_size) if self.camera else None
 
+    @property
+    def blur_heads(self) -> bool:
+        """Read-only view of the mode: True exactly when ``privacy_mode == "boxes"``."""
+        return self.privacy_mode == "boxes"
+
     def process(
         self,
         frame: np.ndarray,
@@ -100,11 +113,14 @@ class FrameProcessor:
         *,
         total_frames: int | None = None,
         started_at: float | None = None,
+        keep_clean: bool = False,
     ) -> FrameResult:
         """Track, analyse and draw ``frame`` in place; the result's ``frame`` is the drawn image.
 
         ``total_frames`` only feeds the "Frame N/total" overlay line (None for live sources).
         ``started_at`` is when work on this frame began (default: now), for processing FPS.
+        ``keep_clean`` stores an undrawn copy in :attr:`clean_frame` (else it is reset to None) so
+        :meth:`draw` can render the same frame in another privacy mode.
         """
         started_at = time.perf_counter() if started_at is None else started_at
         if self._frame_size is None:
@@ -113,14 +129,32 @@ class FrameProcessor:
         result = track_frame(
             self.tracker, self.analyzer, frame, frame_index, timestamp_s, self._frame_size, started_at
         )
+        self.clean_frame = result.frame.copy() if keep_clean else None
         self.draw(result, total_frames)
         return result
 
-    def draw(self, result: FrameResult, total_frames: int | None = None) -> None:
-        """Blur heads (if enabled) and draw zone, service point, people, alert banner and panel."""
-        frame, people, queue = result.frame, result.people, result.queue
-        if self.blur_heads:
+    def draw(
+        self,
+        result: FrameResult,
+        total_frames: int | None = None,
+        privacy_mode: str | None = None,
+        frame: np.ndarray | None = None,
+    ) -> None:
+        """Apply the privacy mode, then draw zone, service point, people, alert banner and panel.
+
+        ``privacy_mode`` (default: the processor's) is ``none``, ``boxes`` (blur person-box heads) or
+        ``frame`` (pixelate the whole frame first). ``frame`` is the image drawn on in place
+        (default ``result.frame``): pass a copy of :attr:`clean_frame` to render a second output.
+        """
+        mode = self.privacy_mode if privacy_mode is None else privacy_mode
+        if mode not in PRIVACY_MODES:
+            raise ValueError(f"privacy_mode must be one of {PRIVACY_MODES}")
+        frame = result.frame if frame is None else frame
+        people, queue = result.people, result.queue
+        if mode == "boxes":
             blur_heads(frame, people, self.head_fraction)
+        elif mode == "frame":
+            pixelate_frame(frame)
         if self._zone_px is not None:
             draw_queue_zone(frame, self._zone_px)
         if self._service_px is not None:

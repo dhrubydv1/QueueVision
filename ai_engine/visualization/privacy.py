@@ -10,6 +10,22 @@ import numpy as np
 from ai_engine.detection.types import PersonDetection
 
 DEFAULT_HEAD_FRACTION = 0.2
+PRIVACY_MODES = ("none", "boxes", "frame")
+
+
+def pixelate_frame(frame: np.ndarray, block: int | None = None) -> np.ndarray:
+    """Pixelate the whole frame in place, so nobody is recognisable, detected or not.
+
+    Downscales by ``block`` px with INTER_AREA and scales back up with INTER_NEAREST. The default
+    block is ``max(8, round(width / 40))`` px.
+    """
+    height, width = frame.shape[:2]
+    block = max(8, round(width / 40)) if block is None else block
+    if block < 1:
+        raise ValueError("block must be >= 1")
+    small = cv2.resize(frame, (max(width // block, 1), max(height // block, 1)), interpolation=cv2.INTER_AREA)
+    frame[:] = cv2.resize(small, (width, height), interpolation=cv2.INTER_NEAREST)
+    return frame
 
 
 def blur_heads(

@@ -396,7 +396,13 @@ class JobManager:
             state["frames"] = update.frame_index + 1
             if update.image is not None:
                 try:
-                    self.preview.offer(video_id, update.image, update.people, self._clock())
+                    self.preview.offer(
+                        video_id,
+                        update.image,
+                        update.people,
+                        self._clock(),
+                        already_private=update.image_privacy is not None,
+                    )
                 except Exception:  # the preview is optional: never fail the run over it
                     LOGGER.exception("preview encode failed for run %s", video_id)
             queue = update.queue
@@ -420,6 +426,10 @@ class JobManager:
                 if delay > 0:
                     self._wait(delay)
 
+        # blur_heads=false means no blur on the saved video, whatever privacy_mode says.
+        video_privacy_mode = (
+            str(options.get("privacy_mode", "boxes")) if options.get("blur_heads", True) else "none"
+        )
         try:
             report = process_video(
                 source,
@@ -429,7 +439,8 @@ class JobManager:
                     camera=camera,
                     frame_stride=stride,
                     max_frames=options.get("max_frames"),
-                    blur_heads=bool(options.get("blur_heads", True)),
+                    privacy_mode=video_privacy_mode,
+                    preview_privacy_mode=str(options.get("preview_privacy_mode", "frame")),
                 ),
                 on_frame=on_frame,
                 should_stop=self._should_stop,

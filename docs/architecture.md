@@ -272,7 +272,7 @@ exit code 1.
 | `api/main.py` | `create_app(settings, tracker_factory)`: assembly only (settings, `JobManager`, lifespan, exception handler, `include_router` calls); `app` for uvicorn |
 | `api/deps.py` | Shared dependencies read from `request.app.state` (`get_settings`, `get_jobs`, `get_preview`, `SettingsDep`, `JobsDep`), `open_db`, `origin_allowed`, `contained_path`, `get_record`. No module-level app state |
 | `api/routes/` | One router module per area, listed below |
-| `api/preview.py` | `PreviewStore` (latest head-blurred JPEG per processing run, memory only, at most 5 per second), `render_preview`, `mjpeg_part` |
+| `api/preview.py` | `PreviewStore` (latest privacy-rendered JPEG per processing run, memory only, at most 5 per second), `render_preview`, `mjpeg_part` |
 | `api/models.py` | Pydantic response models |
 | `api/static/index.html` | Demo test page (plain HTML/CSS/JS, no build step, no CDN) |
 | `api/__main__.py` | `python -m api` |
@@ -385,10 +385,11 @@ exports accuracy data and starts the API.
 
 ```
  engine frame ──► process_video(frame_callback_wants_image=True)
-      │              FrameUpdate.image (the drawn frame) and FrameUpdate.people (boxes), only when asked
+      │              FrameUpdate.image (drawn in preview_privacy_mode) and FrameUpdate.people (boxes), only when asked
       ▼
- JobManager.on_frame ──► PreviewStore.offer(video_id, image, people)      (worker thread)
-      │                    at most one frame per 0.2 s: copy, blur heads (privacy.py),
+ JobManager.on_frame ──► PreviewStore.offer(video_id, image, people, already_private=True)  (worker thread)
+      │                    at most one frame per 0.2 s: copy (heads are blurred here only when
+      │                    the image was not already privacy-rendered),
       │                    downscale to <= 960 px wide, JPEG quality 70; latest only, in memory
       ▼
  GET preview.jpg  (latest JPEG)        GET preview.mjpg  (multipart/x-mixed-replace, polls the store every 0.1 s,
@@ -397,8 +398,8 @@ exports accuracy data and starts the API.
 
 `FrameUpdate.image` and `.people` default to `None` and are set only when the
 caller passes `frame_callback_wants_image=True`; the CLI never does, so its work
-and output files are unchanged (a test compares them). The preview is blurred
-on a copy even when the run's `blur_heads` option is off, is never written to disk
+and output files are unchanged (a test compares them). The preview is privacy-rendered (`frame` by default, or `boxes`; see
+[privacy.md](privacy.md)) even when the run's `blur_heads` option is off, is never written to disk
 and is dropped when the run ends. Real-time pacing (`realtime` option) lives in the
 same `on_frame` handler: it waits on an event until `start + video_time` and never
 accumulates lag.

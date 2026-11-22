@@ -117,6 +117,24 @@
             ],
             "title": "Max Frames"
           },
+          "preview_privacy_mode": {
+            "default": "frame",
+            "enum": [
+              "boxes",
+              "frame"
+            ],
+            "title": "Preview Privacy Mode",
+            "type": "string"
+          },
+          "privacy_mode": {
+            "default": "boxes",
+            "enum": [
+              "boxes",
+              "frame"
+            ],
+            "title": "Privacy Mode",
+            "type": "string"
+          },
           "realtime": {
             "default": false,
             "title": "Realtime",
@@ -388,6 +406,37 @@
               }
             ],
             "title": "Max Frames"
+          },
+          "preview_privacy_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "boxes",
+                  "frame"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Privacy Mode"
+          },
+          "privacy_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "none",
+                  "boxes",
+                  "frame"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Privacy Mode"
           },
           "realtime": {
             "default": false,

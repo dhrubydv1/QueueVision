@@ -1,9 +1,76 @@
 # Testing Report
 
-The fix-pass session 2 evidence (clip-bootstrap intervals, IoU 0.5/0.3 attribution, detector and tracker comparisons) comes first, then the Anonymous Bank call-centre results (predictor accuracy on real call-centre queues), then the Sprint 8 browser checklist (pending, for a person) and pacing investigation, then Sprint 7 (session 2) results, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
+The fix-pass session 3 evidence (privacy modes, pacing experiments) comes first, then the fix-pass session 2 evidence (clip-bootstrap intervals, IoU 0.5/0.3 attribution, detector and tracker comparisons) comes first, then the Anonymous Bank call-centre results (predictor accuracy on real call-centre queues), then the Sprint 8 browser checklist (pending, for a person) and pacing investigation, then Sprint 7 (session 2) results, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
 kept at the end. Every number here comes from a command that was actually run
 on the machine described under Sprint 2 (same environment). Nothing was
 estimated.
+
+## Fix pass, session 3: privacy modes and pacing experiments (`fix/privacy-performance`, 2026-11-17)
+
+**Result in one sentence: previews now default to whole-frame pixelation and no pacing change was adopted, because the only remedy that closed the gap (a full-size warm-up forward pass) used 2.6 times the CPU.** The session summary, rulings and pending items are in [fix_privacy_performance_report.md](fix_privacy_performance_report.md); what Sprint 8 live cameras should expect is in its section "What Sprint 8 live cameras should expect".
+
+Numbers below come from `outputs/s10_pacing/` (local, gitignored; `decision.json`, `order.json`, `run_r{1,2,3}_{fast,a,b,c,d}.json`) and from the commands named here.
+
+### Privacy-mode tests (what each proves)
+
+| Test (file) | What it proves |
+|---|---|
+| `pixelate_removes_detail_of_unreported_person` (`tests/test_privacy_frame_mode.py`) | A 1-px checkerboard patch has per-16-px-block variance above 1000 before and exactly 0 after `pixelate_frame` |
+| `frame_mode_hides_person_the_detector_missed` | Through `FrameProcessor` with a tracker reporting a different box, the patch variance is 0 in `frame` and still above 1000 in `none` and `boxes`: `frame` hides people the detector missed, `boxes` does not |
+| `overlays_drawn_after_pixelation` | Opaque overlay pixels (box edge, panel text) equal those drawn without blur; on a flat frame, `frame` output equals `none` output exactly |
+| `boxes_matches_legacy_blur_heads_path` | `boxes` and `blur_heads=True` are pixel-identical to the old `blur_heads()` followed by a `none` draw |
+| `none_unchanged_and_default`, `conflicting_arguments_raise`, `modes_constant` | `none` is unchanged and the default; `blur_heads=True` with `none` or `frame`, or an unknown mode, raises `ValueError` |
+| `second_render_from_clean_copy` | The clean copy equals the input; the second render equals a processor built in that mode; the primary output is unaffected |
+| Golden test (`tests/test_frame_processor_golden.py`) | Both scenarios run with preview `boxes` and with the default `frame` preview against the unchanged frozen reference; the update image hash is compared only for the `boxes` run (the preview is no longer the video-mode frame by design) |
+| Pipeline and API preview tests (`tests/test_pipeline.py`, `tests/test_api_preview.py`, `tests/test_api.py`) | On a textured clip, `frame` previews are pixelated (identical-neighbour share about 0.72 against 0.02 for `boxes`); the saved video is identical whichever preview mode is used (frame hashes, frozen clock); form fields are validated (422), `options.privacy_mode` is the mode the saved video really got, old runs return `null` |
+| `dashboard/components/UploadForm.test.tsx` | The two selects exist, default to `boxes` (video) and `frame` (preview), and are sent with the upload |
+
+Limit: pixelation is tested on synthetic patterns and a noise clip. Nobody has yet looked at frame-mode pixelation on real close faces (pending, see the session report).
+
+### Pacing experiments (Sprint 8 gap, re-measured with remedies)
+
+Question: does anything cheap close the gap between paced and unpaced real-time processing (Sprint 8 section below)? The adoption rule was fixed in the plan before any measurement: gap = median per-frame detector-update time of (a) minus that of the unpaced reference (fast), measured in the same session; a remedy is adopted only if its update median is at most fast + gap / 3 **and** its process CPU time (`resource.getrusage(RUSAGE_SELF)` user + system) is at most 10 % above (a)'s; lowest CPU wins among those that pass; otherwise nothing is adopted.
+
+Method:
+
+- Clip `datasets/raw/cad_seq25.mp4` (617 frames, 20.567 s), camera `cad_seq25`, stride 3 (207 tracker updates per run), YOLO11n on MPS.
+- Five configurations x 3 repeats, each run in its own process (a throwaway unpaced run loads the model, then one measured run), 20 s idle pause between runs, order rotated: r1 fast, a, b, c, d; r2 b, c, d, fast, a; r3 d, fast, a, b, c (`order.json`). One model job at a time.
+- fast: unpaced reference. a: paced as now. b: a under `caffeinate -i` (only this configuration used it). c: warm-up, one raw forward pass of the detector network on a blank 1x3x640x640 tensor (`torch.no_grad`, MPS synchronize) after each pacing wait; not `tracker.warmup`, which resets tracker state. d: spin-tail, sleep to 2 ms before the deadline, then spin.
+- Driver `scripts/run_pacing_experiments.py`; per-run command `scripts/measure_realtime.py --stages --strides 3 --repeats 1 --variant ...` (exact commands in `order.json`).
+
+Results, min / median / max over 3 runs (source `decision.json`, `per_config`):
+
+| Config | Wall s | Waited s | Non-wait s | Update median ms | CPU s |
+|---|---|---|---|---|---|
+| fast | 10.029 / 10.140 / 10.931 | 0 | same as wall | 32.168 / 32.346 / 33.221 | 6.326 / 6.397 / 7.129 |
+| a paced as now | 21.167 / 21.551 / 21.837 | 8.574 / 8.616 / 9.018 | 12.149 / 12.977 / 13.222 | 37.809 / 40.249 / 40.889 | 8.397 / 8.660 / 8.814 |
+| b caffeinate | 21.200 / 21.214 / 21.362 | 8.759 / 8.848 / 9.024 | 12.191 / 12.352 / 12.603 | 40.053 / 40.466 / 41.177 | 8.708 / 8.776 / 8.949 |
+| c warm-up | 21.300 / 21.479 / 21.825 | 4.832 / 4.945 / 5.062 | 16.238 / 16.646 / 16.880 | 33.410 / 34.493 / 34.534 | 22.329 / 22.437 / 22.641 |
+| d spin-tail | 21.196 / 21.507 / 22.209 | 8.554 / 9.051 / 9.145 | 12.145 / 12.953 / 13.064 | 40.109 / 40.312 / 41.070 | 8.567 / 8.713 / 8.738 |
+
+Gap = 40.249 - 32.346 = **7.903 ms** (`gap_ms`). Criterion 1 threshold: update median at most 32.346 + 7.903 / 3 = 34.980 ms. Criterion 2 limit: CPU at most 1.10 x 8.660 = 9.526 s.
+
+| Remedy | Update median ms | Gap closed | Criterion 1 | CPU median s | CPU / a | Criterion 2 | Adopted |
+|---|---|---|---|---|---|---|---|
+| b | 40.466 | -2.7 % | fail | 8.776 | 1.013 | pass | no |
+| c | 34.493 | 72.8 % (but see limits) | pass | 22.437 | 2.591 | **fail** | no |
+| d | 40.312 | -0.8 % | fail | 8.713 | 1.006 | pass | no |
+
+**Decision: nothing adopted; findings documented** (`decision_text`). No pacing code or product behaviour changed this session.
+
+Limits, stated plainly:
+
+- The machine was on battery (68 %, discharging) with load average about 4.8 (other sessions open). The gap here is 7.9 ms against about 12 ms in Sprint 8, and fast was 10.1 s wall against 9.1 s then. Compare within this session only.
+- n = 3 per configuration, and a's update median ranged 37.8 to 40.9 ms, large against a 7.9 ms gap. The idle effect itself may differ on AC power, so "b and d changed nothing" was measured on battery and may not transfer.
+- c's update median mixes about 104 frames that had no wait before them (they run back to back, the fast condition), because the warm-up runs after the wait and makes the run late (only about 101 of 205 frames waited: 4.9 s waited against 8.6 s). So c's 34.5 ms does **not** show that the warm-up restores speed. The run files of this session have no after-wait / no-wait split; the script now writes one (`update_split`), but no run was repeated.
+- c's CPU failure applies to the full-size 1x3x640x640 warm-up only (about 60 ms per call, 6.0 to 6.2 s over about 101 calls). A cheaper warm-up was not tested: adding a variant after seeing the results would be post-hoc against the pre-registered rule.
+- That the warm-up leaves tracking results unchanged was checked by reasoning only (`no_grad`, no predictor or tracker state touched); the variants' outputs were not kept or compared.
+- Whole-process CPU includes the worker, preview and OpenCV threads.
+- The stage timers in `scripts/measure_realtime.py` referenced `run_tracking.blur_heads` and similar names that moved to `ai_engine/frame_processor.py` in session 1's refactor, so `measure_realtime.py --stages` was broken on `main`. They were re-pointed this session (script only).
+
+### Session 3 command results
+
+Final commands (raw output in `outputs/s10_final_commands/`) and baselines are in [fix_privacy_performance_report.md](fix_privacy_performance_report.md).
 
 ## Fix pass, session 2: uncertainty and detector/tracker comparisons (`fix/evaluation`, 2026-11-16)
 
@@ -327,10 +394,10 @@ Fill the Result columns with PASS, FAIL (say what you saw) or N/A. Leave blank w
 | 1 | Overview (`/`) | Loads without console errors. After load the line under "Overview" shows the full date (for example "Friday 13 November 2026") and "N runs processing" (or "1 run processing"); no flash, no hydration warning. The nav links are at least 44 px tall (top bar on desktop, bottom bar on phone) | | | | |
 | 2 | Overview, lists | "Latest completed runs" (up to 3) and "Recent recorded runs" (up to 10) link to the run; a processing run shows a card whose name links to the Live page, and a "Watch live" link next to it in the "Recent recorded runs" table; the accuracy summary card is present, or says the accuracy data is not generated | | | | |
 | 3 | Runs (`/runs`) | Upload form: Video file, Camera config, Every Nth frame, Blur heads, Process in real time, Start. The "All runs" table has columns Name, Camera, Status, Created, Frames processed (newest first; there is no sorting). The Created column is a clock time with the browser's zone (shows "NPT" only when the browser zone is Asia/Kathmandu, which means Nepal Time). Status chips are readable; no horizontal scroll on phone | | | | |
-| 4 | Live (`/live?id=N`), real-time run | Upload with "Process in real time" ticked: the page opens on `/live`. The preview shows video with **heads blurred**; Queue length, Predicted wait, Service rate and People in frame update; the queue chart and Events list grow; "Last update HH:MM:SS" appears. **Cancel run** stops the run and the chip changes to Cancelled; "Open the recorded run" then appears | | | | |
+| 4 | Live (`/live?id=N`), real-time run | Upload with "Process in real time" ticked: the page opens on `/live`. The preview shows video with the **whole frame pixelated** (default `preview_privacy_mode=frame`); Queue length, Predicted wait, Service rate and People in frame update; the queue chart and Events list grow; "Last update HH:MM:SS" appears. **Cancel run** stops the run and the chip changes to Cancelled; "Open the recorded run" then appears | | | | |
 | 5 | Live, congestion banner | When congestion is active a "Congestion alert" banner appears with its reasons and the chip reads "Live · congested". The note "Acknowledging records the time for this alert." is visible without hovering, and the **Acknowledge** button saves the acknowledgement and hides the banner; after a reload the banner stays hidden for that alert, and the Alerts tab of the run shows "Acknowledged HH:MM:SS NPT". (This note is on the Live page only.) | | | | |
 | 6 | Live, offline | Stop the API while the Live page is open: the chip changes to **Offline**, a message "Connection lost. Reconnecting; values below are not current." appears, and the figures are dimmed with a "Last update" line. When the API returns the chip goes back to Live and the message goes away. No blank page | | | | |
-| 7 | Recorded run (`/run?id=N`) | Pick a finished run. Header shows the status chip, "every Nth frame · heads blurred · fast or real time" and the camera; summary cards; the queue chart. The video is the browser's plain video control: press play and drag the scrubber to seek (there is no click-to-seek from the chart or lists). Heads are blurred. A run made with Blur heads off shows a note instead of the video. "Report (JSON)" and "Time series (CSV)" links work; Delete asks "Delete run N?" and Keep cancels it | | | | |
+| 7 | Recorded run (`/run?id=N`) | Pick a finished run. Header shows the status chip, "every Nth frame · heads blurred · fast or real time" and the camera; summary cards; the queue chart. The video is the browser's plain video control: press play and drag the scrubber to seek (there is no click-to-seek from the chart or lists). Heads are blurred (the default `privacy_mode=boxes`; with `frame` the whole video frame is pixelated). A run made with Blur heads off shows a note instead of the video. "Report (JSON)" and "Time series (CSV)" links work; Delete asks "Delete run N?" and Keep cancels it | | | | |
 | 8 | Recorded run, tabs | Three tabs: **Waits**, **Events**, **Alerts**. They switch by click and by Left/Right arrows, Home and End, with focus and selection moving together. Waits lists Person, Joined, Service, Wait, Abandoned; Alerts lists Time, Event, Queue length, Reasons. Congestion rows read "Congestion started" and "Congestion ended" | | | | |
 | 9 | Accuracy (`/accuracy`) | Headline cards (mean absolute error, bias, within one person) show numbers with their frame counts. A section whose source file is missing reads "Not available — <reason> (<path>)", never 0. The Waiting time card reads "Measured" with "N recorded clips", or "Not measured yet". The split buttons (All, Validation, Test) change the count-error charts; "Limits of these numbers" is listed | | | | |
 | 10 | `/legacy` | The old test page loads; `/legacy?x=1` keeps the query string; `/legacy` redirects to `/legacy/` | | | | |

@@ -36,7 +36,7 @@ Open `/`. The audience sees the "Overview" page: under the title a full date
 and "N runs processing" (or "1 run processing"), the lists "Latest completed
 runs" and "Recent recorded runs", and a card with the accuracy summary (or a
 message that the accuracy data is not generated). Say: everything on screen
-comes from the API; heads are blurred in every image the dashboard shows.
+comes from the API; every image the dashboard shows is privacy-protected (live previews pixelate the whole frame by default; saved videos have heads blurred).
 
 ## 2. Upload with real time on (30 s)
 
@@ -49,7 +49,7 @@ open on the recorded run instead.
 
 ## 3. Live page (2 minutes)
 
-The audience sees the video preview with **heads blurred**, and the figures
+The audience sees the video preview with **the whole frame pixelated** (the default preview privacy mode), and the figures
 "Queue length", "Predicted wait", "Service rate" and "People in frame" update
 while the run is paced to the video's own speed. The queue chart and the Events
 list grow, and "Last update HH:MM:SS" appears. Point out that "Predicted wait"

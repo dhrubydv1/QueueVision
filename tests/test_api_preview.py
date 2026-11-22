@@ -11,6 +11,7 @@ import numpy as np
 from ai_engine.detection.types import PersonDetection
 from api import preview as preview_module
 from api.preview import PreviewStore, mjpeg_part, render_preview
+from tests.conftest import write_synthetic_video
 from tests.test_api import WAIT, clip, make_client, settings, upload, wait_status  # noqa: F401
 from tests.test_api_jobs import GatedTracker
 
@@ -33,6 +34,13 @@ def test_render_preview_blurs_heads_only() -> None:
     mask = np.ones(image.shape[:2], dtype=bool)
     mask[30:46, 60:100] = False
     assert np.array_equal(out[mask], original[mask])
+
+
+def test_render_preview_already_private_is_not_blurred_again() -> None:
+    image = np.random.default_rng(1).integers(0, 256, (160, 200, 3), dtype=np.uint8)
+    people = [PersonDetection(bbox=(60, 30, 100, 110), confidence=0.9, track_id=1)]
+    assert np.array_equal(render_preview(image, people, already_private=True), image)
+    assert not np.array_equal(render_preview(image, people), image)  # safety path still blurs
 
 
 def test_render_preview_downscales_wide_frames() -> None:
@@ -169,38 +177,63 @@ def test_main_sets_graceful_shutdown_timeout(monkeypatch) -> None:
     assert captured["timeout_graceful_shutdown"] == 5
 
 
-def test_preview_blurred_even_when_blur_off(settings, clip, monkeypatch) -> None:  # noqa: F811
-    seen: list[np.ndarray] = []
+def run_preview_capture(settings, clip, monkeypatch, **form):  # noqa: F811
+    seen: list[tuple[np.ndarray, bool, tuple]] = []
     real = preview_module.render_preview
 
-    def spy(image, people):
-        seen.append(image.copy())
-        return real(image, people)
+    def spy(image, people, already_private=False):
+        seen.append((image.copy(), already_private, tuple(p.bbox for p in people)))
+        return real(image, people, already_private)
 
     monkeypatch.setattr(preview_module, "render_preview", spy)
     reached, release = threading.Event(), threading.Event()
     with make_client(settings, lambda: GatedTracker(reached, release, block_at=3)) as client:
         jobs = client.app.state.jobs
-        video_id = upload(client, clip, blur_heads="false").json()["video_id"]
+        video_id = upload(client, clip, **form).json()["video_id"]
         assert reached.wait(WAIT)
         wait_for_preview(client, video_id)
         latest = jobs.preview.latest(video_id)
+        run = client.get(f"/api/videos/{video_id}").json()
         release.set()
         wait_status(client, video_id)
-    raw = seen[latest[0] - 1]  # the spy runs once per encode: input of the stored frame
+    return seen, latest, run
+
+
+def equal_pair_share(region: np.ndarray) -> float:
+    """Share of horizontally adjacent pixel pairs that are identical (high only when pixelated)."""
+    return float((region[:, 1:] == region[:, :-1]).all(axis=2).mean())
+
+
+def textured_clip(tmp_path):
+    return write_synthetic_video(tmp_path / "textured.mp4", frames=60, textured=True)
+
+
+def test_preview_is_frame_mode_even_when_blur_off(settings, tmp_path, monkeypatch) -> None:  # noqa: F811
+    seen, latest, run = run_preview_capture(
+        settings, textured_clip(tmp_path), monkeypatch, blur_heads="false"
+    )
+    assert run["options"]["preview_privacy_mode"] == "frame" and run["options"]["privacy_mode"] == "none"
+    raw, already_private, _boxes = seen[latest[0] - 1]  # the spy runs once per encode
+    assert already_private is True
+    assert equal_pair_share(raw[96:128, 0:64]) > 0.6  # pixelated background noise
     stored = cv2.imdecode(np.frombuffer(latest[1], np.uint8), cv2.IMREAD_COLOR)
     assert stored.shape == raw.shape
-    # the input head box (frame 0 person at x 120..160, y 30..46) is still sharp: the box outline
-    # drawn on the annotated frame gives it strong edges
-    head = (slice(30, 46), slice(120, 160))
-    assert np.abs(np.diff(raw[head].astype(int), axis=1)).max() > 60
-    _ok, buffer = cv2.imencode(".jpg", raw, [cv2.IMWRITE_JPEG_QUALITY, 70])
-    unblurred = cv2.imdecode(buffer, cv2.IMREAD_COLOR)  # what the same JPEG would show without blur
-    diff = np.abs(stored.astype(int) - unblurred.astype(int))
-    assert diff[head].mean() > 2.0  # the head region differs from the sharp input
-    outside = np.ones(raw.shape[:2], dtype=bool)
-    outside[head] = False
-    assert diff[outside].mean() < 0.5  # rest of the frame matches an unblurred encode
+
+
+def test_preview_boxes_mode_blurs_heads_when_video_blur_off(settings, tmp_path, monkeypatch) -> None:  # noqa: F811
+    seen, latest, run = run_preview_capture(
+        settings, textured_clip(tmp_path), monkeypatch, blur_heads="false", preview_privacy_mode="boxes"
+    )
+    assert run["options"]["preview_privacy_mode"] == "boxes"
+    raw, already_private, boxes = seen[latest[0] - 1]
+    assert already_private is True and boxes
+    x1, y1, x2, y2 = (int(v) for v in boxes[0])
+    rows = slice(y1 + 2, y1 + max(3, int(0.2 * (y2 - y1))) - 2)
+    head = raw[rows, x1 + 2 : x2 - 2]
+    assert head.size
+    # sharp uniform noise has a mean absolute neighbour difference of 256 / 3 = 85
+    assert float(np.abs(np.diff(head.astype(int), axis=1)).mean()) < 0.4 * 85  # the head is blurred
+    assert equal_pair_share(raw[96:128, 0:64]) < 0.2  # the rest of the frame is not pixelated
 
 
 def test_main_port_and_host_reach_the_app_settings(monkeypatch) -> None:

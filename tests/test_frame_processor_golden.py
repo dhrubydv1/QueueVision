@@ -314,6 +314,7 @@ def _reference_process_video(
             "max_frames": options.max_frames,
             "display_enabled": options.show,
             "blur_heads": options.blur_heads,
+            "privacy_mode": options.video_privacy_mode,  # additive key (Task 2)
             "head_fraction": options.head_fraction if options.blur_heads else None,
             "video_codec": video_codec,
         },
@@ -401,11 +402,17 @@ def run_both(
     tmp_path: Path,
     make_tracker: Callable[[], Any],
     monkeypatch: pytest.MonkeyPatch,
+    preview: str = "boxes",
     **options: Any,
 ) -> dict[str, tuple[dict[str, Any], list[tuple[Any, ...]]]]:
     # Frozen clock: drawn FPS values and metrics FPS become deterministic (0.0 for processing).
     monkeypatch.setattr(time, "perf_counter", lambda: 1000.0)
     runs = {}
+    # The reference hands out the drawn video-mode (boxes) frame, so the update image hash only
+    # compares when the new preview mode is the video mode; with the default ``frame`` preview (a second
+    # render from a clean copy) the saved video and everything else must still match the reference.
+    same_mode = preview == "boxes"
+    options = {"preview_privacy_mode": preview, **options}
     for label, function in (("reference", _reference_process_video), ("new", process_video)):
         updates: list[tuple[Any, ...]] = []
 
@@ -418,7 +425,9 @@ def run_both(
                     update.people_in_frame,
                     update.processing_fps,
                     update.queue,
-                    hashlib.sha256(update.image.tobytes()).hexdigest(),
+                    # the reference passes the drawn (video-mode) frame; the new code renders the preview
+                    # in ``preview_privacy_mode``, which only matches it when it equals the video mode
+                    hashlib.sha256(update.image.tobytes()).hexdigest() if same_mode else None,
                     update.people,
                 )
             )
@@ -462,7 +471,10 @@ def assert_outputs_identical(tmp_path: Path, name: str, runs: dict[str, Any]) ->
 # --- tests --------------------------------------------------------------------------------------
 
 
-def test_golden_camera_run_matches_frozen_reference(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("preview", ["boxes", "frame"])
+def test_golden_camera_run_matches_frozen_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preview: str
+) -> None:
     video = write_synthetic_video(tmp_path / "walker.mp4", frames=60)
     camera_path = tmp_path / "walker.yaml"
     camera_path.write_text(CAMERA_YAML)
@@ -472,6 +484,7 @@ def test_golden_camera_run_matches_frozen_reference(tmp_path: Path, monkeypatch:
         tmp_path,
         WalkerTracker,
         monkeypatch,
+        preview=preview,
         camera=camera,
         save_mot=True,
         blur_heads=True,
@@ -496,8 +509,9 @@ def test_golden_camera_run_matches_frozen_reference(tmp_path: Path, monkeypatch:
     assert len((tmp_path / "new" / "tracks" / "walker_mot.txt").read_text().splitlines()) == 60
 
 
+@pytest.mark.parametrize("preview", ["boxes", "frame"])
 def test_golden_plain_run_with_stride_matches_frozen_reference(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preview: str
 ) -> None:
     video = write_large_video(tmp_path / "large.mp4")
     runs = run_both(
@@ -505,6 +519,7 @@ def test_golden_plain_run_with_stride_matches_frozen_reference(
         tmp_path,
         FakeTracker,
         monkeypatch,
+        preview=preview,
         frame_stride=2,
         save_mot=True,
         blur_heads=True,

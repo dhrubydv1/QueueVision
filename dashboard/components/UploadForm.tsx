@@ -17,6 +17,8 @@ export function UploadForm({ cameras, onStarted }: Readonly<{ cameras: CameraInf
     form.set("camera_id", String(data.get("camera_id") ?? ""));
     form.set("frame_stride", String(data.get("frame_stride") ?? "1"));
     form.set("blur_heads", data.get("blur_heads") === "on" ? "true" : "false");
+    form.set("privacy_mode", String(data.get("privacy_mode") ?? "boxes"));
+    form.set("preview_privacy_mode", String(data.get("preview_privacy_mode") ?? "frame"));
     form.set("realtime", data.get("realtime") === "on" ? "true" : "false");
     setBusy(true);
     setError(null);
@@ -48,6 +50,20 @@ export function UploadForm({ cameras, onStarted }: Readonly<{ cameras: CameraInf
       </label>
       <label className="flex items-center gap-2 text-sm text-text">
         <input type="checkbox" name="blur_heads" defaultChecked /> Blur heads
+      </label>
+      <label className="flex flex-col gap-1 text-[13px] font-medium text-text-2">
+        Saved video privacy
+        <select name="privacy_mode" defaultValue="boxes" className={CONTROL}>
+          <option value="boxes">Blur heads in boxes</option>
+          <option value="frame">Pixelate whole frame</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1 text-[13px] font-medium text-text-2">
+        Live preview privacy
+        <select name="preview_privacy_mode" defaultValue="frame" className={CONTROL}>
+          <option value="frame">Pixelate whole frame</option>
+          <option value="boxes">Blur heads in boxes</option>
+        </select>
       </label>
       <label className="flex items-center gap-2 text-sm text-text">
         <input type="checkbox" name="realtime" /> Process in real time

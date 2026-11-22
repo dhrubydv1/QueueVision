@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import resource
 import shutil
 import statistics
 import sys
@@ -64,7 +65,7 @@ class StageTimer:
 
 def install_stage_timers(timer: StageTimer) -> None:
     """Monkeypatch the pipeline pieces with timing wrappers (only for this process)."""
-    from ai_engine import run_tracking
+    from ai_engine import frame_processor as draw_module  # the draw helpers moved here from run_tracking
     from ai_engine.queue.analyzer import QueueAnalyzer
     from ai_engine.tracking.tracker import PersonTracker
     from ai_engine.video.video_loader import VideoLoader, VideoWriter
@@ -102,7 +103,7 @@ def install_stage_timers(timer: StageTimer) -> None:
         "draw_alert_banner",
         "draw_metrics_panel",
     ):
-        setattr(run_tracking, name, timer.wrap(getattr(run_tracking, name), f"draw:{name}"))
+        setattr(draw_module, name, timer.wrap(getattr(draw_module, name), f"draw:{name}"))
     preview.PreviewStore.offer = timer.wrap(preview.PreviewStore.offer, "preview_offer", keep=True)
     original_render = preview.render_preview
     preview.render_preview = timer.wrap(original_render, "preview_render")  # called only on encodes
@@ -126,6 +127,169 @@ def percentile(values: list[float], q: float) -> float | None:
 
 def spread(values: list[float]) -> dict:
     return {"min": min(values), "median": statistics.median(values), "max": max(values), "all": values}
+
+
+SPIN_TAIL_S = 0.002  # spin-tail variant: sleep to this long before the deadline, then spin
+
+
+def cpu_seconds() -> float:
+    """User + system CPU seconds used so far by this process (all threads)."""
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    return usage.ru_utime + usage.ru_stime
+
+
+def make_variant_wait(variant, sleep, clock, warmup=None, tail_s: float = SPIN_TAIL_S):
+    """Build the pacing wait for a variant. ``sleep(seconds)`` may be interruptible; ``clock`` is monotonic.
+
+    baseline: plain sleep (what the product does now).
+    warmup:   plain sleep, then ``warmup()`` once, just before the next frame is processed.
+    spin-tail: sleep until ``tail_s`` before the deadline, then spin on the clock until the deadline.
+    The returned callable returns ``(result, wait_seconds, warmup_seconds)``; the wait excludes warm-up time.
+    """
+    if variant not in ("baseline", "warmup", "spin-tail"):
+        raise ValueError(f"unknown variant {variant!r}")
+
+    def wait(delay: float):
+        began = clock()
+        result = False
+        if variant == "spin-tail":
+            deadline = began + delay
+            coarse = deadline - tail_s - clock()
+            if coarse > 0:
+                result = sleep(coarse)
+            while clock() < deadline:
+                pass
+        else:
+            result = sleep(delay)
+        waited = clock() - began
+        warm = 0.0
+        if variant == "warmup" and warmup is not None:
+            w0 = clock()
+            warmup()
+            warm = clock() - w0
+        return result, waited, warm
+
+    return wait
+
+
+def update_split(timer: StageTimer) -> dict:
+    """Update-time medians (ms) and frame counts overall, after a pacing wait, and with no wait before it."""
+    out = {}
+    for key, name in (
+        ("all", "tracker_update"),
+        ("after_wait", "tracker_update_after_wait"),
+        ("no_wait", "tracker_update_no_wait"),
+    ):
+        samples = timer.samples.get(name, [])
+        out[key] = {
+            "frames": len(samples),
+            "median_ms": 1000 * statistics.median(samples) if samples else None,
+            "p90_ms": 1000 * percentile(samples, 0.9) if samples else None,
+        }
+    return out
+
+
+def torch_warmup_for(get_tracker):
+    """One raw forward pass of the detector network on a blank frame (no tracker state touched)."""
+
+    def warm() -> None:
+        import torch
+
+        detector = get_tracker().detector
+        net = detector.model.model
+        param = next(net.parameters())
+        size = int(detector.image_size)
+        with torch.no_grad():
+            net(torch.zeros(1, 3, size, size, device=param.device, dtype=param.dtype))
+        if param.device.type == "mps":
+            torch.mps.synchronize()
+
+    return warm
+
+
+def run_variant(args, fps: float, count: int) -> int:
+    """One process, one measured run: throwaway fast run, then either an unpaced or a paced run."""
+    timer = StageTimer()
+    waits: list[float] = []
+    warm_times: list[float] = []
+    out_dir: Path = args.stages_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    current: dict = {}
+    with tempfile.TemporaryDirectory(prefix="qv_pacing_") as tmp:
+        settings = ApiSettings(data_dir=Path(tmp), camera_dir=PROJECT_ROOT / "configs" / "cameras")
+        settings.data_dir.mkdir(parents=True, exist_ok=True)
+        conn = db.connect(settings.db_path)
+        db.init_db(conn)
+        conn.close()
+        base_factory = default_tracker_factory(settings)
+
+        def factory():
+            current["tracker"] = base_factory()
+            return current["tracker"]
+
+        def sleep(seconds: float):
+            return manager._interrupt.wait(seconds)
+
+        paced_wait = make_variant_wait(
+            args.variant, sleep, time.monotonic, torch_warmup_for(lambda: current["tracker"])
+        )
+
+        def counting_wait(delay: float) -> object:
+            result, waited, warm = paced_wait(delay)
+            waits.append(waited)
+            timer.add("pacing_wait", waited)
+            if warm:
+                warm_times.append(warm)
+                timer.add("warmup", warm)
+            timer.after_wait = True
+            return result
+
+        manager = JobManager(settings, factory, wait=counting_wait)
+        manager.start()
+        try:
+            install_stage_timers(timer)
+            run_job(settings, manager, args.video, args.camera, realtime=False, stride=args.strides[0])
+            runs = []
+            for rep in range(1, args.repeats + 1):
+                timer.reset()
+                waits.clear()
+                warm_times.clear()
+                cpu0 = cpu_seconds()
+                job = run_job(settings, manager, args.video, args.camera, not args.unpaced, args.strides[0])
+                cpu = cpu_seconds() - cpu0
+                waited = sum(waits)
+                updates = timer.samples.get("tracker_update", [])
+                runs.append(
+                    {
+                        "stride": args.strides[0],
+                        "rep": rep,
+                        "variant": "fast" if args.unpaced else args.variant,
+                        "realtime": not args.unpaced,
+                        "wall_s": job["wall_s"],
+                        "waited_s": waited,
+                        "wait_calls": len(waits),
+                        "non_wait_s": job["wall_s"] - waited,
+                        "warmup_s": sum(warm_times),
+                        "warmup_calls": len(warm_times),
+                        "cpu_s": cpu,
+                        "frames": len(updates),
+                        "update_median_ms": 1000 * statistics.median(updates),
+                        "update_p90_ms": 1000 * percentile(updates, 0.9),
+                        "update_split": update_split(timer),
+                    }
+                )
+                print(json.dumps(runs[-1]), flush=True)
+        finally:
+            manager.stop()
+    summary = {
+        "video": args.video.name,
+        "camera": args.camera,
+        "clip_fps": fps,
+        "clip_frames": count,
+        "runs": runs,
+    }
+    (out_dir / args.stages_file).write_text(json.dumps(summary, indent=2) + "\n")
+    return 0
 
 
 def run_stages(args, fps: float, count: int) -> int:
@@ -287,6 +451,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--spin-wait", action="store_true", help="diagnostic: busy-wait instead of sleeping in pacing waits"
     )
+    parser.add_argument(
+        "--variant",
+        choices=("baseline", "warmup", "spin-tail"),
+        help="with --stages: throwaway run, then one measured run of this variant",
+    )
+    parser.add_argument("--unpaced", action="store_true", help="with --variant: measure the fast reference")
     parser.add_argument("--stages-file", default="stages.json")
     parser.add_argument("--stages-dir", type=Path, default=PROJECT_ROOT / "outputs" / "s8_pacing")
     args = parser.parse_args(argv)
@@ -299,6 +469,8 @@ def main(argv: list[str] | None = None) -> int:
     count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
     capture.release()
     duration = count / fps
+    if args.stages and args.variant:
+        return run_variant(args, fps, count)
     if args.stages:
         return run_stages(args, fps, count)
 

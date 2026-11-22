@@ -67,10 +67,13 @@ from ai_engine.utils.device import DeviceUnavailableError
 from ai_engine.video.transcode import original_copy_path, reencode_h264
 from ai_engine.video.video_loader import VideoLoader, VideoLoadError, VideoWriter, source_name
 from ai_engine.visualization.metrics_overlay import PANEL_POSITIONS
-from ai_engine.visualization.privacy import DEFAULT_HEAD_FRACTION
+from ai_engine.visualization.privacy import DEFAULT_HEAD_FRACTION, PRIVACY_MODES
 
 LOGGER = logging.getLogger("queuevision")
 WINDOW_NAME = "QueueVision - press q to stop"
+
+
+PREVIEW_PRIVACY_MODES = ("boxes", "frame")  # a preview always has privacy applied
 
 
 @dataclass(frozen=True)
@@ -83,7 +86,9 @@ class RunOptions:
     max_frames: int | None = None
     show: bool = False
     save_mot: bool = False
-    blur_heads: bool = False
+    blur_heads: bool = False  # legacy spelling of privacy_mode="boxes"
+    privacy_mode: str | None = None  # saved video: none | boxes | frame (None: follow blur_heads)
+    preview_privacy_mode: str = "frame"  # image handed to on_frame: boxes | frame, never none
     head_fraction: float = DEFAULT_HEAD_FRACTION
     panel_position: str = "top-left"
     h264: bool = True
@@ -98,6 +103,17 @@ class RunOptions:
             raise ValueError(f"panel_position must be one of {PANEL_POSITIONS}")
         if not 0.0 < self.head_fraction <= 1.0:
             raise ValueError("head_fraction must be in (0, 1]")
+        if self.privacy_mode is not None and self.privacy_mode not in PRIVACY_MODES:
+            raise ValueError(f"privacy_mode must be one of {PRIVACY_MODES}")
+        if self.blur_heads and self.privacy_mode in ("none", "frame"):
+            raise ValueError(f"blur_heads=True conflicts with privacy_mode={self.privacy_mode!r}")
+        if self.preview_privacy_mode not in PREVIEW_PRIVACY_MODES:
+            raise ValueError(f"preview_privacy_mode must be one of {PREVIEW_PRIVACY_MODES}")
+
+    @property
+    def video_privacy_mode(self) -> str:
+        """The privacy mode of the saved video: ``none``, ``boxes`` or ``frame``."""
+        return "boxes" if self.blur_heads else (self.privacy_mode or "none")
 
 
 @dataclass(frozen=True)
@@ -110,10 +126,12 @@ class FrameUpdate:
     people_in_frame: int
     processing_fps: float  # running average
     queue: QueueFrameState | None
-    # Only set when ``process_video(frame_callback_wants_image=True)``. ``image`` is the drawn frame
-    # that was just written, valid only during the callback (copy it to keep it).
+    # Only set when ``process_video(frame_callback_wants_image=True)``. ``image`` is the frame drawn
+    # in ``RunOptions.preview_privacy_mode`` (``image_privacy`` names it, so a consumer knows privacy
+    # is already applied), valid only during the callback (copy it to keep it).
     image: np.ndarray | None = None
     people: tuple[PersonDetection, ...] | None = None
+    image_privacy: str | None = None
 
 
 def model_display_name(model_path: Path) -> str:
@@ -218,8 +236,10 @@ def process_video(
 
     ``on_frame`` is called after each processed frame is drawn and written. ``should_stop`` is
     checked after ``on_frame``; returning True ends the run like pressing ``q`` (outputs are
-    still written). With ``frame_callback_wants_image`` the update also carries the drawn frame and
-    people (see :class:`FrameUpdate`). Returns the metrics report that was saved to disk.
+    still written). With ``frame_callback_wants_image`` the update also carries a frame drawn in
+    ``options.preview_privacy_mode`` (a copy of the undrawn frame, made only when that differs from
+    the saved video's mode) and the people (see :class:`FrameUpdate`). Returns the metrics report
+    that was saved to disk.
 
     Each frame goes through :class:`FrameProcessor` (tracking, queue, drawing) and then
     :class:`RunWriters` (output files).
@@ -256,7 +276,7 @@ def process_video(
         processor = FrameProcessor(
             tracker,
             camera,
-            blur_heads=options.blur_heads,
+            privacy_mode=options.video_privacy_mode,
             head_fraction=options.head_fraction,
             panel_position=options.panel_position,
             stitching=options.stitching,
@@ -268,6 +288,8 @@ def process_video(
         if options.show:
             stack.callback(cv2.destroyAllWindows)
 
+        # Only copy the undrawn frame when the preview needs a different mode than the video.
+        second_render = frame_callback_wants_image and options.preview_privacy_mode != processor.privacy_mode
         for source_frame in iter_source_frames(loader, options.frame_stride, options.max_frames):
             result = processor.process(
                 source_frame.frame,
@@ -275,8 +297,19 @@ def process_video(
                 source_frame.timestamp_s,
                 total_frames=metadata.frame_count,
                 started_at=source_frame.started_at,
+                keep_clean=second_render,
             )
             frame, people, queue = result.frame, result.people, result.queue
+            preview_image = frame
+            if second_render:
+                # Before record(); the copy is drawn on in place, then no unblurred frame is retained.
+                preview_image, processor.clean_frame = processor.clean_frame, None
+                processor.draw(
+                    result,
+                    metadata.frame_count,
+                    privacy_mode=options.preview_privacy_mode,
+                    frame=preview_image,
+                )
             writers.write_video(result)
             processor.record(result)
             writers.add(result)
@@ -300,8 +333,9 @@ def process_video(
                         people_in_frame=len(people),
                         processing_fps=performance.average_processing_fps,
                         queue=queue,
-                        image=frame if frame_callback_wants_image else None,
+                        image=preview_image if frame_callback_wants_image else None,
                         people=tuple(people) if frame_callback_wants_image else None,
+                        image_privacy=options.preview_privacy_mode if frame_callback_wants_image else None,
                     )
                 )
             if should_stop and should_stop():
@@ -351,8 +385,9 @@ def process_video(
             "tracker": tracker.describe(),
             "max_frames": options.max_frames,
             "display_enabled": options.show,
-            "blur_heads": options.blur_heads,
-            "head_fraction": options.head_fraction if options.blur_heads else None,
+            "blur_heads": options.video_privacy_mode == "boxes",
+            "privacy_mode": options.video_privacy_mode,
+            "head_fraction": options.head_fraction if options.video_privacy_mode == "boxes" else None,
             "video_codec": video_codec,
         },
         "stopped_early": stopped_early,
@@ -468,6 +503,13 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--save-mot", action="store_true", help="Write MOTChallenge track file")
     parser.add_argument("--blur-heads", action="store_true", help="Blur head regions in the saved video")
+    parser.add_argument(
+        "--privacy-mode",
+        choices=PRIVACY_MODES,
+        default=None,
+        help="Privacy of the saved video: none (default), boxes (blur person-box heads, same as "
+        "--blur-heads) or frame (pixelate the whole frame, hides people the detector missed)",
+    )
     parser.add_argument("--head-fraction", type=float, default=DEFAULT_HEAD_FRACTION)
     parser.add_argument("--panel-position", default="top-left", choices=PANEL_POSITIONS)
     parser.add_argument("--no-h264", action="store_true", help="Skip ffmpeg H.264 re-encoding")
@@ -475,6 +517,10 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--show", action="store_true", help="Display frames while processing")
     parser.add_argument("--max-frames", type=int, default=None, help="Stop after this many processed frames")
     args = parser.parse_args(argv)
+    if args.blur_heads and args.privacy_mode in ("none", "frame"):
+        parser.error(
+            f"--blur-heads means --privacy-mode boxes; it conflicts with --privacy-mode {args.privacy_mode}"
+        )
     if args.reid == "on" and args.tracker != "botsort":
         parser.error("--reid on requires --tracker botsort")
     if args.reid == "on" and is_coreml_model(resolve_model_path(args.model)):
@@ -501,6 +547,7 @@ def main(argv: list[str] | None = None) -> int:
             show=args.show,
             save_mot=args.save_mot,
             blur_heads=args.blur_heads,
+            privacy_mode=args.privacy_mode,
             head_fraction=args.head_fraction,
             panel_position=args.panel_position,
             h264=not args.no_h264,

@@ -119,7 +119,7 @@ The report's `queue.service_rate` section gains `estimator` (`"queue_length_over
 | `POST /api/videos/{id}/alerts/{alert_id}/ack` | Acknowledge an alert; returns the updated alert row. The first call sets `acknowledged_at`, repeat calls change nothing; `404` for an unknown video, an unknown alert, or an alert of another video |
 | `GET /api/videos/{id}/timeseries` | Per-second rows (same columns as the CLI's `<name>_queue.csv`) |
 | `GET /api/videos/{id}/timeseries.csv` | The time series as the CLI's `<name>_queue.csv` file download (Sprint 7); `404` when not available |
-| `GET /api/videos/{id}/preview.jpg` | Latest head-blurred JPEG of a processing run (Sprint 7); `404` otherwise |
+| `GET /api/videos/{id}/preview.jpg` | Latest privacy-rendered JPEG (`preview_privacy_mode`, default whole-frame pixelation) of a processing run (Sprint 7); `404` otherwise |
 | `GET /api/videos/{id}/preview.mjpg` | `multipart/x-mixed-replace` stream of preview JPEGs (Sprint 7) |
 | `GET /api/accuracy` | The dashboard's accuracy data (`data/accuracy.json`); `404` until `scripts/export_accuracy.py` has run (Sprint 7) |
 | `GET /api/videos/{id}/report` | The full metrics JSON; `404` until the run has a report |
@@ -139,7 +139,9 @@ Multipart form fields:
 | `file` | yes | Extension `.mp4`, `.avi`, `.mov`, `.mkv` or `.m4v`; non-empty; at most the upload limit (default 500 MB); the content must match the extension and be a readable video (see below) |
 | `camera_id` | yes | Letters, digits, `_` and `-`; must match a valid file `<camera_id>.yaml` in the camera directory. A camera config is required |
 | `frame_stride` | no | Integer 1 to 10, default 1 |
-| `blur_heads` | no | Boolean, default `true` (see [privacy.md](privacy.md)) |
+| `blur_heads` | no | Boolean, default `true` (see [privacy.md](privacy.md)). `false` means the saved video has no blur whatever `privacy_mode` says |
+| `privacy_mode` | no | `boxes` (default, blur person-box heads) or `frame` (pixelate the whole frame) for the saved video; other values give `422`. Ignored when `blur_heads=false` |
+| `preview_privacy_mode` | no | `boxes` or `frame` (default) for the live preview; never off. Other values give `422` |
 | `max_frames` | no | Integer >= 1; stops after that many processed frames |
 | `realtime` | no | Boolean, default `false` (Sprint 7): pace the run to the clip's own speed, see below |
 
@@ -198,7 +200,7 @@ the metrics report; only the leading fields are shown):
   "camera_id": "cad_seq25",
   "status": "completed",
   "error": null,
-  "options": {"frame_stride": 1, "blur_heads": true, "max_frames": null},
+  "options": {"frame_stride": 1, "blur_heads": true, "privacy_mode": "boxes", "preview_privacy_mode": "frame", "max_frames": null},
   "fps": 30.0,
   "frames_total": 617,
   "frames_processed": 617,
@@ -355,13 +357,14 @@ returns the option:
  "summary": {"camera_id": "cad_seq25", "zone": [[0.06, 0.6], [0.94, 0.6], [0.94, 0.93], [0.06, 0.93]], "...": "..."}}
 ```
 
-Runs stored before Sprint 7 have no `realtime` key in `options`; treat it as `false`.
+Runs stored before Sprint 7 have no `realtime` key in `options`; treat it as `false`. `options.privacy_mode` is the mode the saved video really got: `none` when `blur_heads` is false (whatever was posted), else `boxes` or `frame`. Runs stored before the frame privacy mode report `null` for both `privacy_mode` and `preview_privacy_mode` (their modes were not recorded; those saved videos followed `blur_heads` and their previews were head-blurred).
 
 ### A2. Live preview
 
 While a run is `processing`, the server keeps the latest preview frame **in
-memory only**: the annotated frame with every detected person's head blurred
-(always, even if the run's `blur_heads` option is off), at most 960 px wide,
+memory only**: the annotated frame rendered in the run's `preview_privacy_mode` (`frame`, the
+default, pixelates the whole frame; `boxes` blurs every detected person's head),
+always, even if the run's `blur_heads` option is off, at most 960 px wide,
 JPEG quality 70, encoded at most 5 times a second. It is dropped when the run
 ends; nothing is written to disk.
 
@@ -495,4 +498,4 @@ always scope them by `video_id`.
 
 No live cameras, no authentication or accounts, no HTTPS or deployment, and
 only one job processes at a time. The annotated video is played after the run;
-during a run only the head-blurred preview below is available.
+during a run only the privacy-rendered (pixelated by default) preview below is available.

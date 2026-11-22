@@ -459,3 +459,49 @@ def test_route_registration_order(settings) -> None:
     assert type(flat[mount][1]).__name__ == "Mount"
     redirects = [i for i, (p, r) in enumerate(flat) if p == "/legacy" and i != mount]
     assert redirects and min(redirects) > mount
+
+
+def test_upload_privacy_fields_defaults_validation_and_storage(settings, clip) -> None:
+    with make_client(settings) as client:
+        assert upload(client, clip, privacy_mode="none").status_code == 422  # saved video: boxes|frame only
+        assert upload(client, clip, privacy_mode="bogus").status_code == 422
+        assert upload(client, clip, preview_privacy_mode="none").status_code == 422  # never unprivate
+        default = upload(client, clip)
+        assert default.status_code == 202, default.text
+        options = default.json()["options"]
+        assert options["privacy_mode"] == "boxes" and options["preview_privacy_mode"] == "frame"
+        assert options["blur_heads"] is True
+        wait_status(client, default.json()["video_id"])
+        chosen = upload(client, clip, privacy_mode="frame", preview_privacy_mode="boxes")
+        assert chosen.status_code == 202, chosen.text
+        video_id = chosen.json()["video_id"]
+        assert chosen.json()["options"]["privacy_mode"] == "frame"
+        run = wait_status(client, video_id)
+        assert run["options"]["preview_privacy_mode"] == "boxes"
+        report = client.get(f"/api/videos/{video_id}/report").json()
+        assert report["configuration"]["privacy_mode"] == "frame"
+
+
+def test_blur_heads_false_means_no_blur_whatever_privacy_mode(settings, clip) -> None:
+    with make_client(settings) as client:
+        response = upload(client, clip, blur_heads="false", privacy_mode="frame")
+        assert response.status_code == 202, response.text
+        video_id = response.json()["video_id"]
+        wait_status(client, video_id)
+        report = client.get(f"/api/videos/{video_id}/report").json()
+        assert report["configuration"]["privacy_mode"] == "none"
+        assert report["configuration"]["blur_heads"] is False
+
+
+def test_old_run_options_report_null_privacy_modes(settings) -> None:
+    with make_client(settings) as client:
+        conn = db.connect(settings.db_path)
+        try:  # a run stored before the frame privacy mode: no privacy keys in its options
+            video_id = db.create_video(
+                conn, "old.mp4", "walker", {"frame_stride": 1, "blur_heads": True, "max_frames": None}
+            )
+        finally:
+            conn.close()
+        options = client.get(f"/api/videos/{video_id}").json()["options"]
+        assert options["privacy_mode"] is None and options["preview_privacy_mode"] is None
+        assert options["blur_heads"] is True and options["frame_stride"] == 1

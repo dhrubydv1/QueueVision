@@ -7,7 +7,7 @@ import os
 import re
 import shutil
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi import Path as PathParam
@@ -83,6 +83,8 @@ def upload(
     camera_id: Annotated[str, Form()],
     frame_stride: Annotated[int, Form(ge=1, le=10)] = 1,
     blur_heads: Annotated[bool, Form()] = True,
+    privacy_mode: Annotated[Literal["boxes", "frame"], Form()] = "boxes",
+    preview_privacy_mode: Annotated[Literal["boxes", "frame"], Form()] = "frame",
     max_frames: Annotated[int | None, Form(ge=1)] = None,
     realtime: Annotated[bool, Form()] = False,
 ) -> dict:
@@ -103,6 +105,8 @@ def upload(
     options = {
         "frame_stride": frame_stride,
         "blur_heads": blur_heads,
+        "privacy_mode": privacy_mode if blur_heads else "none",  # the mode the saved video really gets
+        "preview_privacy_mode": preview_privacy_mode,
         "max_frames": max_frames,
         "realtime": realtime,
     }
