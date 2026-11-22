@@ -785,7 +785,10 @@ Ruff is configured in `pyproject.toml`.
 | 2 (done) | Queue zone and membership, queue-length series, zone events, evaluation tools, ByteTrack fix, CoreML, H.264, head blur, CI |
 | **3 (done)** | Service point, ID-switch stitching, lifecycle events, waiting time, service rate and predicted wait, congestion alerts, waiting-time evaluation |
 | **4 (done)** | FastAPI upload API, WebSocket live progress, SQLite persistence, demo test page, Collective Activity Dataset clips |
-| 5 | Next.js dashboard, live monitoring, analytics and historical reports |
+| **5 (done)** | Accuracy and validation: opt-in queue-logic variants, replay, stitching evaluation, dataset checks and benchmarks |
+| **6 (done)** | Queue-count error attribution, parameter experiments and waiting-time annotation kit |
+| **7 (done)** | Next.js dashboard, recorded-run live monitoring, analytics and historical reports |
+| 8 (next) | Live webcam/RTSP workers, authentication and permitted own-footage intake; requires real-camera and browser validation |
 
 ## Legacy prototype
 
