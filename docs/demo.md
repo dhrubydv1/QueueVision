@@ -36,7 +36,7 @@ Open `/`. The audience sees the "Overview" page: under the title a full date
 and "N runs processing" (or "1 run processing"), the lists "Latest completed
 runs" and "Recent recorded runs", and a card with the accuracy summary (or a
 message that the accuracy data is not generated). Say: everything on screen
-comes from the API; heads are blurred in every image the dashboard shows.
+comes from the API; every image the dashboard shows is privacy-protected (live previews pixelate the whole frame by default; saved videos have heads blurred).
 
 ## 2. Upload with real time on (30 s)
 
