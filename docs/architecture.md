@@ -378,7 +378,7 @@ loopback and imports nothing from `api/`.
  │   final   → report + status in one transaction → `status`    │
  │ api.live.LiveSupervisor                                      │
  │   start: 409 checks, run row kind='live', spawn worker       │
- │   watchdog: worker_exited, no_heartbeat (10 s, 60 s at start) │
+ │   watchdog: worker_exited, no_heartbeat (10 s, 60 s at start)│
  │   stop: SIGTERM, wait 15 s for the final, then SIGKILL       │
  │   holds the JobManager upload queue while a session runs     │
  └──────────────────────────────────────────────────────────────┘
