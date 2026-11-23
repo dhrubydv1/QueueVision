@@ -412,11 +412,19 @@ export interface components {
             frames_processed: number;
             /** Frames Total */
             frames_total?: number | null;
+            /**
+             * Kind
+             * @default upload
+             * @enum {string}
+             */
+            kind: "upload" | "live";
             options: components["schemas"]["RunOptions"];
             /** Original Name */
             original_name: string;
             /** Percent */
             percent?: number | null;
+            /** Source Kind */
+            source_kind?: ("webcam" | "rtsp" | "clip") | null;
             /** Started At */
             started_at?: string | null;
             /** Status */
@@ -446,6 +454,8 @@ export interface components {
             preview_privacy_mode?: ("boxes" | "frame") | null;
             /** Privacy Mode */
             privacy_mode?: ("none" | "boxes" | "frame") | null;
+            /** Process Fps */
+            process_fps?: number | null;
             /**
              * Realtime
              * @default false

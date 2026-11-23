@@ -505,3 +505,29 @@ def test_old_run_options_report_null_privacy_modes(settings) -> None:
         options = client.get(f"/api/videos/{video_id}").json()["options"]
         assert options["privacy_mode"] is None and options["preview_privacy_mode"] is None
         assert options["blur_heads"] is True and options["frame_stride"] == 1
+
+
+def test_run_record_has_kind(settings, clip) -> None:
+    with make_client(settings) as client:
+        video_id = upload(client, clip).json()["video_id"]
+        run = wait_status(client, video_id)
+        assert client.get(f"/api/videos/{video_id}").json()["kind"] == "upload"
+        assert run["kind"] == "upload" and run["source_kind"] is None
+        assert run["options"]["process_fps"] is None
+        for key in (
+            "video_id",
+            "original_name",
+            "camera_id",
+            "status",
+            "error",
+            "options",
+            "fps",
+            "frames_total",
+            "frames_processed",
+            "percent",
+            "created_at",
+            "started_at",
+            "finished_at",
+            "summary",
+        ):
+            assert key in run

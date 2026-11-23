@@ -323,6 +323,15 @@
             ],
             "title": "Frames Total"
           },
+          "kind": {
+            "default": "upload",
+            "enum": [
+              "upload",
+              "live"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
           "options": {
             "$ref": "#/components/schemas/RunOptions"
           },
@@ -340,6 +349,22 @@
               }
             ],
             "title": "Percent"
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "webcam",
+                  "rtsp",
+                  "clip"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Kind"
           },
           "started_at": {
             "anyOf": [
@@ -437,6 +462,17 @@
               }
             ],
             "title": "Privacy Mode"
+          },
+          "process_fps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Process Fps"
           },
           "realtime": {
             "default": false,

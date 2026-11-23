@@ -35,6 +35,7 @@ class RunOptions(BaseModel):
     preview_privacy_mode: Literal["boxes", "frame"] | None = None
     max_frames: int | None = None
     realtime: bool = False
+    process_fps: float | None = None
 
 
 class Run(BaseModel):
@@ -43,6 +44,8 @@ class Run(BaseModel):
     video_id: int
     original_name: str
     camera_id: str
+    kind: Literal["upload", "live"] = "upload"
+    source_kind: Literal["webcam", "rtsp", "clip"] | None = None
     status: str
     error: str | None = None
     options: RunOptions
