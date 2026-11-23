@@ -26,6 +26,12 @@ MAX_CONSECUTIVE_READ_FAILURES = 30
 READ_RETRY_DELAY_S = 0.05
 
 
+def quiet_opencv_logging() -> None:
+    """Silence OpenCV's own logging (a failed open can print the stream URL). Call once at startup."""
+    with contextlib.suppress(Exception):
+        cv2.setLogLevel(0)  # LOG_LEVEL_SILENT
+
+
 class LiveSourceError(RuntimeError):
     """A live source failed. ``reason`` is ``camera_unavailable`` or ``stream_ended`` (also the message)."""
 
@@ -84,14 +90,16 @@ class _ThreadedCaptureSource:
             capture.release()
             raise LiveSourceError(CAMERA_UNAVAILABLE)
         self._capture = capture
-        self._thread = threading.Thread(target=self._run, name=f"{self.source_kind}-capture", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, args=(capture,), name=f"{self.source_kind}-capture", daemon=True
+        )
         self._thread.start()
 
-    def _run(self) -> None:
+    def _run(self, capture: Any) -> None:
         failures = 0
         while not self._closing:
             try:
-                ok, frame = self._capture.read()
+                ok, frame = capture.read()
             except Exception:
                 ok, frame = False, None
             if self._closing:
@@ -126,11 +134,12 @@ class _ThreadedCaptureSource:
         self._closing = True
         thread, capture = self._thread, self._capture
         self._thread = self._capture = None
-        if thread is not None:
-            thread.join(timeout=2.0)
         if capture is not None:
+            # Releasing first unblocks a read() stuck on a dead stream; then the thread can be joined.
             with contextlib.suppress(Exception):
                 capture.release()
+        if thread is not None:
+            thread.join(timeout=2.0)
 
 
 class WebcamSource(_ThreadedCaptureSource):
@@ -144,6 +153,7 @@ class RtspSource(_ThreadedCaptureSource):
     source_kind = "rtsp"
 
     def __init__(self, url: str, **kwargs: Any) -> None:
+        kwargs.setdefault("capture_factory", lambda target: cv2.VideoCapture(target, cv2.CAP_FFMPEG))
         super().__init__(url, **kwargs)
 
 
@@ -156,8 +166,15 @@ class LoopedClipSource:
 
     source_kind = "clip"
 
-    def __init__(self, path: Path, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        path: Path,
+        clock: Callable[[], float] = time.monotonic,
+        capture_factory: Callable[[str], Any] = cv2.VideoCapture,
+    ) -> None:
         self._path = Path(path)
+        self._capture_factory = capture_factory
+        self._last_good = -1  # highest frame index that decoded
         self._clock = clock
         self.loop_count = 0
         self._capture: Any = None
@@ -168,7 +185,7 @@ class LoopedClipSource:
         self._current: np.ndarray | None = None
 
     def open(self) -> None:
-        capture = cv2.VideoCapture(str(self._path))
+        capture = self._capture_factory(str(self._path))
         fps = capture.get(cv2.CAP_PROP_FPS) if capture.isOpened() else 0.0
         frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) if capture.isOpened() else 0
         if frames < 1:
@@ -179,14 +196,16 @@ class LoopedClipSource:
         self._frame_count = frames
         self._started = self._clock()
 
-    def _frame_at(self, index: int) -> np.ndarray:
+    def _frame_at(self, index: int) -> np.ndarray | None:
+        """The frame at ``index``, or None when the clip has no such frame (past its real end)."""
         if index != self._position or self._current is None:
             if index != self._position + 1:
                 self._capture.set(cv2.CAP_PROP_POS_FRAMES, index)
             ok, frame = self._capture.read()
             if not ok or frame is None:
-                raise LiveSourceError(STREAM_ENDED)
+                return None
             self._position, self._current = index, frame
+            self._last_good = max(self._last_good, index)
         return self._current.copy()
 
     def read_latest(self, timeout_s: float) -> tuple[np.ndarray, float] | None:
@@ -194,8 +213,18 @@ class LoopedClipSource:
             raise LiveSourceError(CAMERA_UNAVAILABLE)
         now = self._clock()
         absolute = math.floor((now - self._started) * self._fps)
-        self.loop_count = absolute // self._frame_count
-        return self._frame_at(absolute % self._frame_count), now
+        while True:
+            index = absolute % self._frame_count
+            frame = self._frame_at(index)
+            if frame is not None:
+                self.loop_count = absolute // self._frame_count
+                return frame, now
+            # The reported count was too high: the real count is one past the last frame that decoded.
+            real_count = self._last_good + 1
+            if real_count < 1 or real_count > index:
+                raise LiveSourceError(STREAM_ENDED)
+            self._frame_count = real_count
+            self._position, self._current = -2, None  # forces a seek on the next read
 
     def close(self) -> None:
         capture, self._capture = self._capture, None
