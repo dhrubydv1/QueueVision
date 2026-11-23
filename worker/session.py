@@ -37,6 +37,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 UNREACHABLE_AFTER_S = 15.0
 BATCH_EVERY_S = 1.0
 HEARTBEAT_AFTER_S = 2.0
+FINAL_ATTEMPTS = 3
+FINAL_RETRY_S = 0.5
 PREVIEW_EVERY_S = 0.2
 PREVIEW_QUALITY = 80
 MAX_PREVIEW_BYTES = 2 * 1024 * 1024
@@ -132,7 +134,8 @@ class Session:
         self.inflight: dict | None = None  # a batch the API has not accepted yet; resent unchanged
         self.next_second = 0
         now = clock()
-        self.last_batch = now
+        self.last_batch = now  # the last batch attempt (paces the sends)
+        self.last_accepted = now  # the last batch the API accepted (paces the heartbeats)
         self.last_heartbeat = now
         self.last_preview = -math.inf
 
@@ -165,6 +168,7 @@ class Session:
         b = self.inflight
         if self.client.batch(b["events"], b["rows"], b["progress"], b["frames"], b["captured"], b["seq"]):
             self.inflight = None
+            self.last_accepted = self.clock()
 
     def heartbeat(self) -> None:
         self.last_heartbeat = self.clock()
@@ -195,7 +199,7 @@ class Session:
             return True
         if self.stop.is_set():
             return True
-        if self.clock() - max(self.last_batch, self.last_heartbeat) >= HEARTBEAT_AFTER_S:
+        if self.clock() - max(self.last_accepted, self.last_heartbeat) >= HEARTBEAT_AFTER_S:
             self.heartbeat()
         return False
 
@@ -235,8 +239,20 @@ def main(
             signal.signal(signal.SIGTERM, previous_handler or signal.SIG_DFL)
 
 
-def _fail(client: IngestClient, reason: str) -> int:
-    client.final("failed", reason, None)
+def send_final(
+    client: IngestClient, sleep: Callable[[float], None], status: str, error: str | None, report: dict | None
+) -> bool:
+    """The final message, up to ``FINAL_ATTEMPTS`` tries ``FINAL_RETRY_S`` apart; stops at the first success."""
+    for attempt in range(FINAL_ATTEMPTS):
+        if client.final(status, error, report):
+            return True
+        if attempt + 1 < FINAL_ATTEMPTS:
+            sleep(FINAL_RETRY_S)
+    return False
+
+
+def _fail(client: IngestClient, sleep: Callable[[float], None], reason: str) -> int:
+    send_final(client, sleep, "failed", reason, None)
     return 1
 
 
@@ -252,7 +268,7 @@ def _run(args, env, client, tracker_factory, source_opener, run_live_fn, clock, 
         client.heartbeat(0, 0.0)  # tells the API the process is up before the (slow) model load
         tracker = (tracker_factory or default_tracker_factory(env))()
         if stop.is_set():  # stopped while the model was loading: completed, no frames
-            client.final("completed", None, None)
+            send_final(client, sleep, "completed", None, None)
             return 0
         source = source_opener(live, env)
         session.timed = _TimedSource(source)
@@ -260,7 +276,7 @@ def _run(args, env, client, tracker_factory, source_opener, run_live_fn, clock, 
         if client.seconds_since_ok() > UNREACHABLE_AFTER_S:
             return 3
         if stop.is_set():  # stopped while the source opened: nothing ran, so no report
-            client.final("completed", None, None)
+            send_final(client, sleep, "completed", None, None)
             return 0
         options = LiveOptions(
             output_dir=args.output_dir,
@@ -283,14 +299,14 @@ def _run(args, env, client, tracker_factory, source_opener, run_live_fn, clock, 
         for _ in range(2):  # a batch still unaccepted, then whatever arrived behind it
             if session.pending():
                 session.send_batch()
-        client.final("completed", None, report)
+        send_final(client, sleep, "completed", None, report)
         return 0
     except LiveSourceError as error:
         LOGGER.error("live source failed: %s", error.reason)
-        return _fail(client, error.reason)
+        return _fail(client, sleep, error.reason)
     except Exception:
         LOGGER.error("worker failed:\n%s", redact(traceback.format_exc()))
-        return _fail(client, ENGINE_ERROR)
+        return _fail(client, sleep, ENGINE_ERROR)
     finally:
         if source is not None:
             try:

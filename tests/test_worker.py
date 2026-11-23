@@ -397,3 +397,84 @@ def test_batch_seq_increments_and_retry_keeps_it(tmp_path):
     assert failed_seqs == [1] and accepted[0]["seq"] == 1  # the retry reuses the failed batch's seq
     assert rec.attempts.count("batch") == len(accepted) + 1  # one failed attempt, resent under seq 1
     assert accepted[0]["progress"] is not None  # the retried batch is the original one, not a rebuilt one
+
+
+def test_heartbeats_continue_while_batches_fail(tmp_path):
+    clock = FakeClock()
+    rec = Recorder(clock)
+
+    def batches_fail(request, timeout=None):
+        if request.full_url.endswith("/batch"):
+            rec.attempts.append("batch")
+            raise urllib.error.URLError("blip")
+        return rec(request, timeout)
+
+    stop = threading.Event()
+    main(
+        [*ARGS, str(tmp_path)],
+        ENV,
+        tracker_factory=FakeTracker,
+        source_opener=lambda live, env: StoppingSource(clock, stop, 9.0),
+        opener=batches_fail,
+        clock=clock,
+        sleep=clock.sleep,
+        stop=stop,
+    )
+    beats = [b["time"] for b in rec.routes("heartbeat")]
+    during = [t for t in beats if 0.5 < t < 9.0]
+    assert len(during) >= 3  # roughly every 2 s although every batch attempt fails
+    assert all(b - a <= 2.5 for a, b in itertools.pairwise(during))
+
+
+def test_final_is_retried_up_to_three_attempts(tmp_path):
+    clock = FakeClock()
+    rec = Recorder(clock)
+    failures = {"left": 2}
+
+    def flaky_final(request, timeout=None):
+        if request.full_url.endswith("/final"):
+            if failures["left"]:
+                failures["left"] -= 1
+                rec.attempts.append("final")
+                raise urllib.error.URLError("blip")
+        return rec(request, timeout)
+
+    stop = threading.Event()
+    code = main(
+        [*ARGS, str(tmp_path)],
+        ENV,
+        tracker_factory=FakeTracker,
+        source_opener=lambda live, env: StoppingSource(clock, stop, 2.0),
+        opener=flaky_final,
+        clock=clock,
+        sleep=clock.sleep,
+        stop=stop,
+    )
+    assert code == 0
+    assert rec.attempts.count("final") == 3  # two failures, then accepted
+    (final,) = rec.routes("final")
+    assert final["json"]["status"] == "completed"
+
+
+def test_final_gives_up_after_three_attempts(tmp_path):
+    clock = FakeClock()
+    rec = Recorder(clock)
+
+    def never(request, timeout=None):
+        if request.full_url.endswith("/final"):
+            rec.attempts.append("final")
+            raise urllib.error.URLError("down")
+        return rec(request, timeout)
+
+    stop = threading.Event()
+    main(
+        [*ARGS, str(tmp_path)],
+        ENV,
+        tracker_factory=FakeTracker,
+        source_opener=lambda live, env: StoppingSource(clock, stop, 2.0),
+        opener=never,
+        clock=clock,
+        sleep=clock.sleep,
+        stop=stop,
+    )
+    assert rec.attempts.count("final") == 3
