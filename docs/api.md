@@ -1,4 +1,4 @@
-# QueueVision API (Sprint 4, extended in Sprint 7)
+# QueueVision API (Sprint 4, extended in Sprint 7 and Sprint 8 session 2)
 
 A small local web service around the engine: upload a recorded video, watch
 progress and live queue numbers over a WebSocket, then play the annotated
@@ -97,10 +97,10 @@ every route (the WebSocket is closed with code 1008 before it is accepted).
 | Method and path | Returns |
 |---|---|
 | `GET /api/health` | `status`, `device` (the device the loaded detector runs on, e.g. `mps`; `null` until a job has loaded the model), `configured_device` (the `--device` setting, e.g. `auto`), `model`, `queue_depth` |
-| `GET /api/cameras` | One entry per `*.yaml` in the camera directory: `id`, `description`, `has_service_point`, `alerts_enabled`, `max_queue_length`, `smoothing_window_s` (both optional, Sprint 7), `error` (set, with the rest empty, for an invalid file) |
+| `GET /api/cameras` | One entry per `*.yaml` in the camera directory: `id`, `description`, `has_service_point`, `alerts_enabled`, `max_queue_length`, `smoothing_window_s` (both optional, Sprint 7), `live_source` and `live_ready` (Sprint 8 session 2), `error` (set, with the rest empty, for an invalid file) |
 | `POST /api/videos` | `202` and the run record. Multipart form, see below |
 | `GET /api/videos` | All runs, newest first |
-| `GET /api/videos/{id}` | Run record: status, progress, options, timings, error, `summary` |
+| `GET /api/videos/{id}` | Run record: status, progress, options, timings, error, `summary`, `kind`, `source_kind` |
 | `GET /api/videos/{id}/events?type=&limit=&offset=` | Event payloads in time order; `type` filters by `event_type`, `limit` 1 to 10000 (default 1000), `offset` >= 0 |
 
 Event types: besides the original types, `service_complete` and `queue_exit` are new
@@ -124,7 +124,10 @@ The report's `queue.service_rate` section gains `estimator` (`"queue_length_over
 | `GET /api/accuracy` | The dashboard's accuracy data (`data/accuracy.json`); `404` until `scripts/export_accuracy.py` has run (Sprint 7) |
 | `GET /api/videos/{id}/report` | The full metrics JSON; `404` until the run has a report |
 | `GET /api/videos/{id}/video` | The annotated H.264 MP4 with HTTP range support (seeking); `404` unless the run is `completed` |
-| `POST /api/videos/{id}/cancel` | Cancels a queued or processing run and returns the run record; `409` if it is not active |
+| `POST /api/videos/{id}/cancel` | Cancels a queued or processing run and returns the run record; `409` if it is not active. On a live run it behaves as `stop` (below) |
+| `POST /api/cameras/{id}/live` | Starts a live session (Sprint 8 session 2): `201` and the run record. See "Live cameras" below |
+| `POST /api/videos/{id}/stop` | Stops a live run and returns the run record; `409` `run is not live` otherwise |
+| `GET /api/live` | Running live sessions (Sprint 8 session 2) |
 | `DELETE /api/videos/{id}` | `204`; deletes the database rows, the upload and the outputs; `409` while processing (cancel first) |
 | `GET /` and any other non-API path | The dashboard's static export (Sprint 7; before that, the test page) |
 | `GET /legacy/` | The Sprint 4 test page (Sprint 7) |
@@ -474,6 +477,108 @@ say "smoothed over 2 s" without computing anything:
  "has_service_point": true, "alerts_enabled": true, "max_queue_length": 8.0, "smoothing_window_s": 2.0, "error": null}
 ```
 
+## Live cameras (Sprint 8 session 2)
+
+A live session reads a camera (a webcam index, an RTSP stream or a recorded clip looped at its own frame
+rate), runs the same queue engine and stores the results in the same tables as a new kind of run. Each session
+is its own operating-system process (`python -m worker`) started and watched by the API; the worker posts its
+results to loopback-only ingest routes, and the API stays the only database writer. The design and the process
+diagram are in [architecture.md](architecture.md); the session report is
+[sprint8_session2_report.md](sprint8_session2_report.md). **No video, frame or JPEG of a live session is written
+to disk** (see [privacy.md](privacy.md)).
+
+### Camera settings
+
+A camera YAML in `configs/cameras/` may have an optional `live:` section. A camera without it cannot be started live.
+
+| Key | Meaning | Default |
+|---|---|---|
+| `source` | `webcam`, `rtsp` or `clip` | required |
+| `webcam_index` | device index for `webcam` | `0` |
+| `rtsp_url_env` | the **name** of the environment variable that holds the RTSP URL (never the URL) | required for `rtsp` |
+| `clip` | file for `clip`, relative to the project root | required for `clip` |
+| `process_fps` | frames processed per second, in (0, 30] | `10` |
+| `preview_privacy_mode` | `frame` or `boxes`; `none` is refused when the config is loaded | `frame` |
+| `max_session_s` | the session stops itself after this many seconds | `7200` |
+
+`GET /api/cameras` entries gain `live_source` (`webcam`, `rtsp`, `clip` or `null`) and `live_ready` (`bool`: a
+webcam is assumed ready, a clip is ready when its file exists, an RTSP camera when its environment variable is
+set). The URL, the variable's value and the clip path are never returned.
+
+### Routes
+
+| Route | Result |
+|---|---|
+| `POST /api/cameras/{camera_id}/live` | `201` and the run record (`video_id`, `kind: "live"`, `source_kind`, status `processing`). The Live page is `/live?id=<video_id>` |
+| `POST /api/videos/{id}/stop` | The worker finishes its current frame, sends its final report and the run ends `completed` with `stopped_by: "operator"` in the report. The call returns the run record once the run has ended; `409` `run is not live` if the run is not a live run in progress, or a stop is already under way (a second stop) |
+| `POST /api/videos/{id}/cancel` | On a live run the same as `stop`, so the Live page's Cancel button works. On an upload it is unchanged |
+| `GET /api/live` | A list of running sessions: `video_id`, `camera_id`, `source_kind`, `started_at`, `heartbeat_age_s` (null until the worker's first heartbeat), `processing_fps`. There is never a URL |
+
+Run records gain two optional fields, `kind` (`upload` or `live`; every older run reads `upload`) and `source_kind`
+(`webcam`, `rtsp`, `clip`, or `null` for an upload). `RunOptions` gains `process_fps` (live runs only, otherwise
+`null`). All existing fields are unchanged; `dashboard/openapi.json` and `dashboard/lib/api-types.ts` were
+regenerated for these additions only.
+
+### `409` reasons on start
+
+`POST /api/cameras/{id}/live` answers with `{"detail": "<reason>"}`:
+
+| Status | Reason | Meaning |
+|---|---|---|
+| `404` | `unknown_camera` | No camera YAML with that id |
+| `409` | `no_live_settings` | The camera has no `live:` section |
+| `409` | `invalid_camera` | The camera YAML does not load (details go to the server log) |
+| `409` | `already_live` | A live session is already running (one at a time) |
+| `409` | `rtsp_env_unset` | An RTSP camera whose environment variable is not set |
+| `409` | `upload_processing` | An upload is being processed; the model runs one job at a time |
+| `500` | `spawn_failed` | The worker process could not be started (the run is marked failed, `worker_start_failed`) |
+
+While a session runs, uploads can still be submitted but stay `queued`; they start after the session ends.
+
+### How a live run ends
+
+| Status | `error` | Cause |
+|---|---|---|
+| `completed` | none | Stopped by the operator (`stopped_by: "operator"`) or by `max_session_s` (`"max_session"`) |
+| `failed` | `camera_unavailable` | No frame within 10 s (first frame) or later; for a webcam this includes a denied camera permission |
+| `failed` | `stream_ended` | The source ended after frames had arrived |
+| `failed` | `engine_error` | An exception in the worker; no traceback or URL is stored |
+| `failed` | `worker_exited` | The worker process ended without sending its final message |
+| `failed` | `no_heartbeat` | No heartbeat for 10 s (60 s are allowed for the first one while the model loads); the worker is killed |
+| `failed` | `stop_timeout` | A stop did not finish within 15 s; the worker was killed |
+| `failed` | `worker_start_failed` | See `spawn_failed` |
+
+An API restart marks every leftover `processing` live run `failed` (the existing start-up rule), and a worker
+whose API has gone away for 15 s exits by itself.
+
+### WebSocket and previews
+
+`WS /ws/videos/{id}` carries the same message types and fields for a live run as for a real-time upload
+(`snapshot`, `progress`, `event`, `status`). `progress.percent` is `null` because a live run has no known length.
+`GET /api/videos/{id}/preview.jpg` and `preview.mjpg` work as for an upload; the image is always privacy-rendered
+(`frame` by default). The report (`GET /api/videos/{id}/report`) adds `kind: "live"`, `source_kind`, `stopped_by`,
+`duration_s` and `loops` (loop number and `timestamp_s` of each restart of a looped clip), and
+`/timeseries.csv` works. There is no `video` for a live run (`404`).
+
+### Ingest routes (internal)
+
+`POST /api/ingest/{id}/batch`, `/preview`, `/heartbeat` and `/final` are what the worker calls. They are not in
+the OpenAPI schema and are not a public interface. Checks run in this order: unknown run `404`, a client that is
+not loopback `403`, a missing or wrong `X-Worker-Token` `401` (compared with `hmac.compare_digest`; the token is
+per run), a run that is not a `processing` live run `409`. A preview body is limited to 2 MB (`413`). A batch
+carries an integer `seq`; the API ignores a batch whose `seq` is not newer than the last one it stored, so a
+retry after a lost answer does not duplicate events.
+
+### Demo command
+
+```
+python -m worker.ctl start cad_seq25     # prints the video id and the Live page URL
+python -m worker.ctl status              # running sessions
+python -m worker.ctl stop cad_seq25
+```
+
+`--api URL` (default `http://127.0.0.1:8000`) points it at another port. It only calls the routes above.
+
 ## Database
 
 SQLite file `data/queuevision.db` (Python's built-in `sqlite3`, WAL mode,
@@ -483,8 +588,8 @@ still written to `data/outputs/<video_id>/` exactly as the CLI writes them.
 
 | Table | Content |
 |---|---|
-| `schema_meta` | `key`/`value`; holds `schema_version` (2, see the migration list in [architecture.md](architecture.md)) |
-| `videos` | One row per run: `video_id`, `original_name`, `camera_id`, `status`, `error`, `options` (JSON), `fps`, `frames_total`, `frames_processed`, `created_at`, `started_at`, `finished_at`, `report` (JSON), `output_dir` |
+| `schema_meta` | `key`/`value`; holds `schema_version` (3, see the migration list in [architecture.md](architecture.md)) |
+| `videos` | One row per run: `video_id`, `original_name`, `camera_id`, `status`, `error`, `options` (JSON), `fps`, `frames_total`, `frames_processed`, `created_at`, `started_at`, `finished_at`, `report` (JSON), `output_dir`, `kind` (`upload` or `live`, default `upload`), `source_kind` (null for uploads) |
 | `events` | `event_id`, `video_id`, `schema_version`, `event_type`, `timestamp_s`, `detected_s`, `frame_index`, `person_key`, `payload` (the full event JSON) |
 | `waits` | `video_id`, `person_key`, `track_ids`, `join_s`, `service_s`, `wait_s`, `abandoned`, `left_s` |
 | `alerts` | `alert_id`, `video_id`, `event_type`, `timestamp_s`, `frame_index`, `condition_since_s`, `reasons`, `queue_length`, `predicted_wait_s`, `acknowledged_at`, `acknowledged_by` |
@@ -496,6 +601,6 @@ always scope them by `video_id`.
 
 ## Not in scope
 
-No live cameras, no authentication or accounts, no HTTPS or deployment, and
-only one job processes at a time. The annotated video is played after the run;
+No authentication or accounts, no HTTPS or deployment, no camera pages in the dashboard (session 3),
+no reconnecting or automatically restarted cameras, and only one model job at a time (a live session or one upload). The annotated video is played after the run;
 during a run only the privacy-rendered (pixelated by default) preview below is available.

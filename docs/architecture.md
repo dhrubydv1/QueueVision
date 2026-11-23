@@ -1,4 +1,4 @@
-# QueueVision Architecture (Sprint 5, dashboard added in Sprint 7)
+# QueueVision Architecture (Sprint 5, dashboard added in Sprint 7, live cameras in Sprint 8 session 2)
 
 ## Data flow
 
@@ -347,6 +347,78 @@ connection. Connections wait up to 30 s for a lock.
 `POST /api/videos/{video_id}/alerts/{alert_id}/ack` sets `acknowledged_at` once
 (repeat calls keep the first time); `GET .../alerts` returns both columns.
 
+## Live cameras (Sprint 8 session 2)
+
+A live camera runs in its **own process**, so an OpenCV or driver crash or hang cannot take the API down. The
+API starts and watches the process and is still the only database writer; the worker talks to it over HTTP on
+loopback and imports nothing from `api/`.
+
+```
+ camera (webcam / RTSP URL from an env var / looped clip)
+        │ capture thread keeps only the newest frame + capture time
+ ┌──────▼─────────────────────────────────────────────┐
+ │ python -m worker  (one per camera; ai_engine only) │   token: env QUEUEVISION_WORKER_TOKEN
+ │  ai_engine.live.run_live:                          │   (never argv)
+ │   newest frame, at most process_fps per second     │
+ │   → FrameProcessor (tracker, queue logic, drawing  │
+ │     in the preview privacy mode, no video writer)  │
+ │  worker.session: about 1 batch per second          │
+ │   (events, time-series rows, progress, seq),       │
+ │   previews (at most 5 per second), heartbeats,     │
+ │   one final message with the report                │
+ └──────┬─────────────────────────────────────────────┘
+        │ HTTP, loopback only, header X-Worker-Token
+        ▼  POST /api/ingest/{id}/batch | preview | heartbeat | final
+ ┌──────────────────────────────────────────────────────────────┐
+ │ api.routes.ingest  (token, loopback, run is processing+live) │
+ │   batch   → db.add_events (waits, alerts), add_timeseries,   │
+ │             set_progress in one transaction → WebSocket      │
+ │             `event` and `progress` messages                  │
+ │   preview → PreviewStore (memory only)                       │
+ │   final   → report + status in one transaction → `status`    │
+ │ api.live.LiveSupervisor                                      │
+ │   start: 409 checks, run row kind='live', spawn worker       │
+ │   watchdog: worker_exited, no_heartbeat (10 s; 60 s startup) │
+ │   stop: SIGTERM, wait 15 s for the final, then SIGKILL       │
+ │   holds the JobManager upload queue while a session runs     │
+ └──────────────────────────────────────────────────────────────┘
+        ▲ POST /api/cameras/{id}/live · /api/videos/{id}/stop · GET /api/live
+        └── browser, `python -m worker.ctl`
+```
+
+| Module | Role |
+|---|---|
+| `ai_engine/live/capture.py` | `WebcamSource`, `RtspSource`, `LoopedClipSource` behind one interface (`read_latest`, `loop_count`, `source_kind`); a thread keeps the newest frame only; `LiveSourceError` carries a fixed reason (`camera_unavailable`, `stream_ended`); no URL in any error or `repr` |
+| `ai_engine/live/loop.py` | `run_live`: pacing at `process_fps`, `timestamp_s` = seconds since the session started, frames numbered as processed, `frames_total` `None`; writes the time-series CSV and the metrics JSON and nothing else; returns the report (adds `kind`, `source_kind`, `stopped_by`, `duration_s`, `loops`) |
+| `ai_engine/run_messages.py` | `progress_message`, `event_message`, `timeseries_row`, moved out of `api/jobs.py` so the worker and the API build identical messages |
+| `ai_engine/queue/camera_config.py` | `LiveSettings` (the optional `live:` section) |
+| `worker/session.py`, `worker/client.py` | Batching, heartbeat, preview rate, SIGTERM handling, exit after 15 s without the API; a standard-library HTTP client that never raises |
+| `worker/ctl.py` | `python -m worker.ctl start\|stop\|status` for the demo |
+| `api/live.py` | `LiveSupervisor` |
+| `api/routes/ingest.py` | The four internal routes (not in OpenAPI) |
+
+**Looped clip.** The clip is replayed at its own frame rate and restarts at the end; time keeps increasing across
+loops. The tracker and queue state are **not** reset at a restart, so the run stays one session. People jump back
+to where they started, which causes false joins and leaves. Each restart is recorded in the report (`loops`).
+Queue numbers from a looped clip show that the system runs, not that it is right.
+
+**Why a separate process.** Approach B of the design: crash isolation and no new API threads that can hang, and the
+pilot extends it instead of rewriting it. The cost is a second model copy (about 530 MB worker peak RSS, see
+[testing_report.md](testing_report.md)) and the process, token and heartbeat machinery. A camera thread inside the
+API was not chosen, and workers that write SQLite themselves were dropped (several writers, and the API would have
+to poll the database to feed the WebSocket).
+
+**One model job at a time.** `JobManager` does not start uploads while a session runs (they stay `queued`) and a
+session cannot start while an upload is processing (`409 upload_processing`); the hold is released exactly once on
+every way a session can end.
+
+**Data flow of a stop.** `POST /api/videos/{id}/stop` → SIGTERM → the worker finishes the current frame, flushes its
+last batch, sends `final` (`completed`) and exits 0 → the API stores the report and the status and publishes
+`status`. No final within 15 s: SIGKILL, run `failed` (`stop_timeout`).
+
+Schema v3 adds `videos.kind` (`upload` default or `live`) and `videos.source_kind`; there is no column for a URL
+or a token.
+
 ## Dashboard, serving and live preview (Sprint 7)
 
 ```
@@ -488,8 +560,9 @@ config  ◄── detection/types ◄── queue/*  ◄── pipeline ◄─�
 * Only `detection/detector.py` and `tracking/tracker.py` touch ultralytics,
   and they import it lazily, so the unit-test suite runs without torch. The CI
   `lint-and-unit` job enforces this by not installing it.
-* The dependency points one way: `api` imports `ai_engine`, and `ai_engine`
-  never imports `api`. `run_tracking.process_video` only offers two optional
+* The dependency points one way: `api` imports `ai_engine`, `worker` imports
+  `ai_engine`, and `ai_engine` imports neither. `worker` never imports `api`;
+  it talks to the API over HTTP only. `run_tracking.process_video` only offers two optional
   hooks (`on_frame`, `should_stop`); the CLI passes neither and is unchanged.
 * Scripts run directly replace `sys.path[0]` with the project root, because
   `ai_engine/queue` would otherwise shadow the standard-library `queue` module.

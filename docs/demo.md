@@ -1,7 +1,7 @@
 # QueueVision demo script (about 5 minutes)
 
 Every step below uses only features that are covered by an automated test or
-listed in [testing_report.md](testing_report.md). The text in quotes is the text
+listed in [testing_report.md](testing_report.md), except the webcam steps in section 6, which are marked pending. The text in quotes is the text
 on screen (taken from the dashboard components).
 
 **Status of the real-browser check: PENDING.** Steps 1 to 4 were exercised by the
@@ -95,6 +95,43 @@ numbers": say what the numbers do not show (CAD is public queueing footage, not
 the target deployment, and no model was trained, so the splits separate tuning
 from held-out reporting).
 
+## 6. Live camera (optional, about 3 minutes)
+
+Session 2 of Sprint 8 added live cameras. Start and stop are by command; the dashboard camera pages come in
+session 3. The Live page (`/live?id=N`) and the recorded run page are the existing ones.
+
+**Stand-in camera (no person needed, covered by an automated test).** With the API running (step 1 above):
+
+```
+python -m worker.ctl start cad_seq25     # looped clip, 10 frames per second processed
+```
+
+It prints `video id N` and the Live page address `http://127.0.0.1:8000/live?id=N`. Open it: the numbers and the
+pixelated preview update within about 10 s (the model loads first). The queue figures jump when the clip restarts
+(people return to where they started, which causes false joins and leaves). **Queue numbers from a looped clip
+are not accuracy figures**; they show that the system runs. Check with `python -m worker.ctl status`, then
+`python -m worker.ctl stop cad_seq25`. The page opens as a recorded run that says "Live session — no video
+recorded", and "Time series (CSV)" still downloads. While a session runs an upload stays queued and starts after
+the stop.
+
+**Webcam (needs a person; PENDING, not yet run).** Before the demo:
+
+1. Point the built-in camera at the real queue. Grant the camera permission to the app that starts the API
+   (Terminal or the IDE) when macOS asks. Without permission the run ends `failed` with `camera_unavailable`
+   within about 10 s.
+2. Draw the queue zone and the service point on a still from the camera (the placeholders in
+   `configs/cameras/webcam.yaml` are only a guess):
+
+   ```
+   python ai_engine/tools/draw_zone.py --video 0 --config configs/cameras/webcam.yaml --target queue_zone
+   python ai_engine/tools/draw_zone.py --video 0 --config configs/cameras/webcam.yaml --target service_line
+   ```
+
+   `--video 0` takes the frame from device 0 (a window opens: left-click the corners, right-click removes the last point; Enter saves, Esc cancels).
+3. Start and stop it the same way: `python -m worker.ctl start webcam`, then `python -m worker.ctl stop webcam`.
+   Nothing is recorded; the preview is whole-frame pixelated.
+4. Measure it once: `python scripts/measure_live.py --camera webcam --seconds 120`.
+
 ## Limits to state out loud
 
 - One queue zone and one service point per camera; two counters need two camera
@@ -103,7 +140,8 @@ from held-out reporting).
   network without reading the phone section of the testing report.
 - Real-time pacing at stride 1 never waits on this machine (processing is about
   as slow as the video), see the pacing section of the testing report.
-- Not shown, because not built yet: live cameras, history pages, notifications.
+- Not shown, because not built yet: camera pages in the dashboard (start and stop are by command in this version), reconnecting cameras, history pages, notifications.
+- The webcam demo (section 6) has not been run by a person yet; the stand-in camera in section 6 is a recorded clip looped, and its queue numbers are not accuracy figures.
 
 ## After the demo
 

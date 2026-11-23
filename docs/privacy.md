@@ -30,6 +30,7 @@ what it does not, and what you must do before pointing a camera at anyone.
 | Annotation frames (`datasets/annotations/<name>_frames/`) | Still images from the footage | **Yes** |
 | API uploads (`data/uploads/<id>/`) | The original uploaded video, unblurred | **Yes** |
 | API annotated video (`data/outputs/<id>/videos/`) | As above; heads blurred (`privacy_mode=boxes`) or the whole frame pixelated (`frame`) when `blur_heads` is on (the API default) | Reduced if blurred, otherwise **yes** |
+| Live session (`data/outputs/<id>/`, Sprint 8 session 2) | The time-series CSV, the metrics JSON and `worker.log` (the worker's log: no frames, no URL, no token). **No video, no image, no JPEG** | Low: no images |
 | API database (`data/queuevision.db`) | Events, waits, alerts, time series and reports: times, counts, anonymous `person_key`, track IDs, file paths and the original upload file name | Low: no images (the file name can still reveal where or when a clip was recorded) |
 
 Events and waits contain **no identities**. `person_key` (`p0001`, `p0002`,
@@ -53,6 +54,27 @@ database rows, the uploaded file and the outputs of that run, and refuses
 while the run is processing (cancel it first). Deleting the `data/` folder
 removes everything. Do not expose the server to a network without adding
 authentication and HTTPS first. See [api.md](api.md).
+
+## Live cameras (Sprint 8 session 2)
+
+A live session sees people through a camera, so this is stricter than an upload. It records nothing.
+
+| Item | Where | Kept |
+|---|---|---|
+| Camera frames | In the worker's memory: the newest frame only, replaced as the next one arrives | Not stored. Never written to disk, including debug dumps and temporary files |
+| Preview JPEG | The worker renders it in a privacy mode (`frame` by default: the whole frame pixelated before anything is drawn; `boxes` is allowed; `none` is refused when the camera config loads), posts it to the API, which keeps the latest one per run in `PreviewStore` memory and drops it when the run ends | Memory only, at most 5 per second |
+| Events, waits, alerts, time series, progress | The database, as for an upload (times, counts, anonymous `person_key`, track IDs) | Until the run is deleted |
+| Time-series CSV and metrics JSON | `data/outputs/<id>/` | Until the run is deleted |
+| Video | None. Recording is **not built**; whether to offer it is a pilot question | n/a |
+| RTSP URL | Only in the worker's memory, read from the environment variable named in the camera config. Never in the database, a log line, an API response, the dashboard, a process argument list or an error message | Not stored |
+| Ingest token | The API's memory and the worker's environment, per run | Not stored, never logged or returned |
+
+The run page of a finished live run says "Live session — no video recorded" instead of showing a player. A live
+run is deleted like any other (`DELETE /api/videos/{id}`). The webcam light and macOS camera permission belong to
+the app that started the API (Terminal or the IDE); granting permission needs a person. Limits: in `boxes` mode a
+person the detector misses is not blurred in the preview (use the default `frame`); a very close face may stay
+partly recognisable in `frame` mode (see "Privacy modes"); the preview endpoints have no login, like the rest of
+the API.
 
 ## Retention
 
