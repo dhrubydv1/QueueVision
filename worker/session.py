@@ -242,7 +242,7 @@ def main(
 def send_final(
     client: IngestClient, sleep: Callable[[float], None], status: str, error: str | None, report: dict | None
 ) -> bool:
-    """The final message, up to ``FINAL_ATTEMPTS`` tries ``FINAL_RETRY_S`` apart; stops at the first success."""
+    """The final message: up to ``FINAL_ATTEMPTS`` tries ``FINAL_RETRY_S`` apart, stopping at a success."""
     for attempt in range(FINAL_ATTEMPTS):
         if client.final(status, error, report):
             return True

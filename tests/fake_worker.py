@@ -4,8 +4,8 @@ Run as ``python -m tests.fake_worker``. ``FAKE_WORKER_MODE`` picks the behaviour
 ``normal`` (heartbeat, batches with progress, ``completed`` on SIGTERM), ``slow_start`` (heartbeat,
 then a few seconds of pretend model loading that SIGTERM cuts short), ``crash`` (heartbeat, then exit 1
 with no final), ``late_frames`` (one heartbeat with no frames, a silent 1.5 s of pretend model
-loading, then ``normal``), ``silent`` (one heartbeat, then nothing until killed) and ``deaf`` (like silent, but
-ignores SIGTERM). It never prints the environment, and so never an RTSP URL.
+loading, then ``normal``), ``silent`` (one heartbeat, then nothing until killed) and ``deaf`` (like
+silent, but ignores SIGTERM). It never prints the environment, and so never an RTSP URL.
 """
 
 from __future__ import annotations

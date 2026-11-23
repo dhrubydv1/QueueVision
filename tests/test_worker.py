@@ -432,11 +432,10 @@ def test_final_is_retried_up_to_three_attempts(tmp_path):
     failures = {"left": 2}
 
     def flaky_final(request, timeout=None):
-        if request.full_url.endswith("/final"):
-            if failures["left"]:
-                failures["left"] -= 1
-                rec.attempts.append("final")
-                raise urllib.error.URLError("blip")
+        if request.full_url.endswith("/final") and failures["left"]:
+            failures["left"] -= 1
+            rec.attempts.append("final")
+            raise urllib.error.URLError("blip")
         return rec(request, timeout)
 
     stop = threading.Event()
