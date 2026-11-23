@@ -222,6 +222,22 @@ class RunWriters:
         return self.last_timestamp - self.first_timestamp + 1 / effective_fps
 
 
+def build_queue_report(
+    camera: CameraConfig, analyzer: Any, summary: QueueSummary, duration_s: float
+) -> dict[str, Any]:
+    """The ``queue`` block of a metrics report (shared by :func:`process_video` and live runs)."""
+    queue_report: dict[str, Any] = {
+        "camera_id": camera.camera_id,
+        "zone": [list(point) for point in camera.queue_zone],
+        "membership": camera.to_dict()["membership"],
+        "smoothing": camera.to_dict()["smoothing"],
+        "members_still_in_queue_at_end": analyzer.membership.queue_count,
+        **summary.to_dict(),
+    }
+    queue_report.update(analyzer.report(duration_s))
+    return queue_report
+
+
 def process_video(
     source: str | Path | int,
     tracker: PersonTracker,
@@ -402,15 +418,9 @@ def process_video(
         ],
     }
     if camera:
-        report_extra["queue"] = {
-            "camera_id": camera.camera_id,
-            "zone": [list(point) for point in camera.queue_zone],
-            "membership": camera.to_dict()["membership"],
-            "smoothing": camera.to_dict()["smoothing"],
-            "members_still_in_queue_at_end": analyzer.membership.queue_count,
-            **writers.queue_summary.to_dict(),
-        }
-        report_extra["queue"].update(analyzer.report(writers.queue_duration_s(effective_fps)))
+        report_extra["queue"] = build_queue_report(
+            camera, analyzer, writers.queue_summary, writers.queue_duration_s(effective_fps)
+        )
     report = performance.build_report(
         device=detector.device,
         total_runtime_seconds=time.perf_counter() - run_started_at,
