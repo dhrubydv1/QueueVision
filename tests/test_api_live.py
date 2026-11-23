@@ -110,6 +110,15 @@ def make_server(tmp_path, monkeypatch):
                 proc.wait(timeout=5)
 
 
+def queue_upload(server: Server, clip) -> int:
+    with open(clip, "rb") as handle:
+        response = server.http.post(
+            "/api/videos", files={"file": ("clip.mp4", handle, "video/mp4")}, data={"camera_id": "nolive"}
+        )
+    assert response.status_code == 202
+    return response.json()["video_id"]
+
+
 def error_of(run: dict) -> str | None:
     return run["error"]
 
@@ -197,35 +206,39 @@ def test_cancel_on_live_run_stops_it(make_server) -> None:
     assert server.http.post(f"/api/videos/{video_id}/cancel").status_code == 409
 
 
-def test_worker_crash_marks_failed(make_server) -> None:
+def test_worker_crash_marks_failed(make_server, clip) -> None:
     server = make_server("crash")
     video_id = server.start_live().json()["video_id"]
+    upload_id = queue_upload(server, clip)  # held while the session runs, released when it ends
     started = time.time()
     run = server.run(video_id)
     assert run["status"] == "failed" and error_of(run) == "worker_exited"
     assert time.time() - started < 3
     assert server.http.get("/api/live").json() == []
+    assert server.run(upload_id)["status"] == "completed"
 
 
-def test_silent_worker_marks_failed_and_killed(make_server) -> None:
+def test_silent_worker_marks_failed_and_killed(make_server, clip) -> None:
     server = make_server("silent", heartbeat_timeout_s=0.6)
     video_id = server.start_live().json()["video_id"]
+    upload_id = queue_upload(server, clip)
     run = server.run(video_id)
     assert run["status"] == "failed" and error_of(run) == "no_heartbeat"
     (proc,) = server.live.spawned
     assert proc.wait(timeout=5) is not None  # killed and reaped
+    assert server.run(upload_id)["status"] == "completed"  # the hold was released
 
 
-def test_stop_timeout_kills_and_fails(make_server) -> None:
+def test_stop_timeout_kills_and_fails(make_server, clip) -> None:
     server = make_server("deaf", stop_timeout_s=1.0, heartbeat_timeout_s=30.0)
     video_id = server.start_live().json()["video_id"]
+    upload_id = queue_upload(server, clip)
     assert server.http.post(f"/api/videos/{video_id}/stop").status_code == 200
     run = server.run(video_id)
     assert run["status"] == "failed" and error_of(run) == "stop_timeout"
     (proc,) = server.live.spawned
     assert proc.poll() is not None
-    assert server.app.state.jobs.hold_uploads()
-    server.app.state.jobs.release_uploads()
+    assert server.run(upload_id)["status"] == "completed"  # the hold was released
 
 
 def test_upload_waits_for_live_session(make_server, clip) -> None:
@@ -285,16 +298,16 @@ def test_shutdown_stops_workers(make_server) -> None:
         conn.close()
 
 
-def test_supervisor_end_cleans_up(make_server) -> None:
+def test_supervisor_end_cleans_up(make_server, clip) -> None:
     server = make_server("silent", heartbeat_timeout_s=0.5)
     video_id = server.start_live().json()["video_id"]
+    upload_id = queue_upload(server, clip)
     server.app.state.ingest_seq[video_id] = 7
     server.app.state.jobs.set_live_state(video_id, {"type": "progress"})
     assert server.run(video_id)["status"] == "failed"
     assert video_id not in server.app.state.ingest_seq
     assert server.app.state.jobs.live_state(video_id) is None
-    assert server.app.state.jobs.hold_uploads()  # not held: the hold was released
-    server.app.state.jobs.release_uploads()
+    assert server.run(upload_id)["status"] == "completed"  # the hold was released
 
 
 def test_verify_uses_the_run_token(make_server) -> None:
