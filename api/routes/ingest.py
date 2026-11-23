@@ -85,6 +85,9 @@ def _store_batch(request: Request, video_id: int, batch: Batch) -> None:
         if batch.seq is not None and batch.seq <= last_seq.get(video_id, 0):
             return
         with open_db(request.app.state.settings) as conn, conn:
+            record = db.get_video(conn, video_id)
+            if record is None or record["status"] != "processing":
+                return  # the final (or the supervisor's end) landed first: a straggler stores nothing
             if batch.events:
                 db.add_events(conn, video_id, batch.events, commit=False)
             if batch.timeseries:
@@ -137,18 +140,18 @@ async def heartbeat(video_id: VideoId, request: Request) -> Response:
 
 def _store_final(request: Request, video_id: int, body: Final) -> None:
     jobs = request.app.state.jobs
-    with open_db(request.app.state.settings) as conn:
-        with conn:  # the report and the final status are stored together or not at all
-            if body.report is not None:
-                db.set_report(conn, video_id, body.report, commit=False)
-            db.set_status(conn, video_id, body.status, body.error, commit=False)
-        record = db.get_video(conn, video_id)
+    with _seq_lock:  # a batch being stored finishes first; one arriving later sees the final status
+        with open_db(request.app.state.settings) as conn:
+            with conn:  # the report and the final status are stored together or not at all
+                if body.report is not None:
+                    db.set_report(conn, video_id, body.report, commit=False)
+                db.set_status(conn, video_id, body.status, body.error, commit=False)
+            record = db.get_video(conn, video_id)
+        request.app.state.ingest_seq.pop(video_id, None)
     if record:
         jobs.publish(video_id, status_message(video_id, record))
     jobs.clear_live_state(video_id)
     jobs.preview.drop(video_id)
-    with _seq_lock:
-        request.app.state.ingest_seq.pop(video_id, None)
     request.app.state.live.finished(video_id)
 
 

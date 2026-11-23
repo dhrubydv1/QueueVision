@@ -294,3 +294,21 @@ def test_hold_refused_while_job_current(settings, clip) -> None:  # noqa: F811
         assert jobs.wait_idle(WAIT)
         assert jobs.hold_uploads() is True
         jobs.release_uploads()
+
+
+def test_straggling_batch_after_final_stores_nothing(settings, client) -> None:
+    from types import SimpleNamespace
+
+    from api.routes.ingest import Batch, _store_batch
+
+    video_id = make_run(settings)
+    final = {"status": "completed", "error": None, "report": {"stopped_by": "operator"}}
+    assert client.post(f"/api/ingest/{video_id}/final", headers=HEADERS, json=final).status_code == 204
+    beats = list(client.app.state.live.beats)
+    # a batch that passed authorize before the final landed, and is only now being stored
+    straggler = Batch.model_validate(batch_body([join_event()], seq=1))
+    _store_batch(SimpleNamespace(app=client.app), video_id, straggler)
+    assert stored(settings, "events", video_id) == 0
+    assert stored(settings, "timeseries", video_id) == 0
+    assert client.app.state.live.beats == beats  # no heartbeat, no publish
+    assert video_id not in client.app.state.ingest_seq
