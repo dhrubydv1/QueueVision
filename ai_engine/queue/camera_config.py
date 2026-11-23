@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from ai_engine.config import PROJECT_ROOT
 
 
 class CameraConfigError(ValueError):
@@ -16,6 +19,9 @@ class CameraConfigError(ValueError):
 MEMBERSHIP_ALGORITHMS = ("legacy", "temporal")
 SERVICE_RATE_BASES = ("service_start", "service_complete")
 STITCHING_ALGORITHMS = ("legacy", "guarded")
+LIVE_SOURCES = ("webcam", "rtsp", "clip")
+LIVE_PREVIEW_PRIVACY_MODES = ("frame", "boxes")
+_ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 
 @dataclass(frozen=True)
@@ -151,6 +157,67 @@ class AlertSettings:
 
 
 @dataclass(frozen=True)
+class LiveSettings:
+    """Where a live session reads frames from.
+
+    * ``source``: ``"webcam"``, ``"rtsp"`` or ``"clip"`` (a recorded file replayed as a stand-in camera).
+    * ``rtsp_url_env``: name of the environment variable holding the RTSP URL. The URL itself
+      is never stored in the config.
+    * ``clip``: file for ``source: clip``; relative paths resolve against the project root.
+    * ``process_fps``: frames per second to process, in (0, 30].
+    * ``preview_privacy_mode``: ``"frame"`` or ``"boxes"``; never ``"none"``.
+    * ``max_session_s``: hard stop for a session, > 0.
+    """
+
+    source: str
+    webcam_index: int = 0
+    rtsp_url_env: str | None = None
+    clip: str | None = None
+    process_fps: float = 10.0
+    preview_privacy_mode: str = "frame"
+    max_session_s: float = 7200.0
+
+    def __post_init__(self) -> None:
+        if self.source not in LIVE_SOURCES:
+            raise CameraConfigError(
+                f"live.source must be one of {', '.join(LIVE_SOURCES)}, got {self.source!r}"
+            )
+        if (
+            isinstance(self.webcam_index, bool)
+            or not isinstance(self.webcam_index, int)
+            or self.webcam_index < 0
+        ):
+            raise CameraConfigError("live.webcam_index must be an integer >= 0")
+        if self.source == "rtsp" and (not isinstance(self.rtsp_url_env, str) or not self.rtsp_url_env):
+            raise CameraConfigError("live.rtsp_url_env is required when live.source is 'rtsp'")
+        if self.rtsp_url_env is not None and (
+            not isinstance(self.rtsp_url_env, str) or not _ENV_NAME.match(self.rtsp_url_env)
+        ):
+            raise CameraConfigError(
+                "live.rtsp_url_env must be an environment variable name like RTSP_URL_CAM1"
+            )
+        if self.source == "clip" and (not isinstance(self.clip, str) or not self.clip):
+            raise CameraConfigError("live.clip is required when live.source is 'clip'")
+        if self.clip is not None and not isinstance(self.clip, str):
+            raise CameraConfigError("live.clip must be a string path")
+        if self.preview_privacy_mode not in LIVE_PREVIEW_PRIVACY_MODES:
+            raise CameraConfigError(
+                f"live.preview_privacy_mode must be one of {', '.join(LIVE_PREVIEW_PRIVACY_MODES)}"
+            )
+        fps = self.process_fps
+        if isinstance(fps, bool) or not isinstance(fps, (int, float)) or not 0 < fps <= 30:
+            raise CameraConfigError(f"live.process_fps must be in (0, 30], got {fps!r}")
+        limit = self.max_session_s
+        if isinstance(limit, bool) or not isinstance(limit, (int, float)) or limit <= 0:
+            raise CameraConfigError(f"live.max_session_s must be a positive number, got {limit!r}")
+
+    def clip_path(self) -> Path:
+        """The clip file, with relative paths resolved against the project root."""
+        path = Path(self.clip or "").expanduser()
+        return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+@dataclass(frozen=True)
 class CameraConfig:
     """Queue zone and membership rules for one camera view.
 
@@ -169,6 +236,7 @@ class CameraConfig:
     service_rate: ServiceRateSettings = field(default_factory=ServiceRateSettings)
     alerts: AlertSettings = field(default_factory=AlertSettings)
     service: ServiceSettings = field(default_factory=ServiceSettings)
+    live: LiveSettings | None = None
 
     def __post_init__(self) -> None:
         validate_polygon(self.queue_zone, "queue_zone")
@@ -323,6 +391,8 @@ class CameraConfig:
             alerts=asdict(self.alerts),
             service=asdict(self.service),
         )
+        if self.live is not None:
+            data["live"] = asdict(self.live)
         return data
 
 
@@ -363,6 +433,20 @@ def _section(data: dict[str, Any], key: str, settings_type: type) -> Any:
     return settings_type(**raw)
 
 
+def _live_section(data: dict[str, Any]) -> LiveSettings | None:
+    raw = data.get("live")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise CameraConfigError("'live' must be a mapping")
+    unknown = set(raw) - set(LiveSettings.__dataclass_fields__)
+    if unknown:
+        raise CameraConfigError(f"Unknown 'live' settings: {', '.join(sorted(unknown))}")
+    if "source" not in raw:
+        raise CameraConfigError("live.source is required")
+    return LiveSettings(**raw)
+
+
 def _optional_points(data: dict[str, Any], key: str, validator: Any) -> Any:
     if data.get(key) is None:
         return None
@@ -387,6 +471,7 @@ def camera_config_from_dict(data: dict[str, Any]) -> CameraConfig:
         service_rate=_section(data, "service_rate", ServiceRateSettings),
         alerts=_section(data, "alerts", AlertSettings),
         service=_section(data, "service", ServiceSettings),
+        live=_live_section(data),
     )
 
 

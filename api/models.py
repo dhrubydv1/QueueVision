@@ -24,6 +24,8 @@ class CameraInfo(BaseModel):
     alerts_enabled: bool = False
     max_queue_length: float | None = None
     smoothing_window_s: float | None = None
+    live_source: Literal["webcam", "rtsp", "clip"] | None = None
+    live_ready: bool = False
     error: str | None = None
 
 

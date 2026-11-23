@@ -40,3 +40,6 @@ alerts:
   max_predicted_wait_seconds: 300
   min_duration_seconds: 10.0
   cooldown_seconds: 60.0
+live:
+  source: clip
+  clip: datasets/raw/cad_seq25.mp4
