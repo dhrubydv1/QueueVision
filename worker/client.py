@@ -70,10 +70,12 @@ class IngestClient:
         progress: dict | None,
         frames_processed: int,
         captured_at_unix: float | None,
+        seq: int | None = None,
     ) -> bool:
         return self._post_json(
             "batch",
             {
+                "seq": seq,
                 "events": events,
                 "timeseries": timeseries,
                 "progress": progress,

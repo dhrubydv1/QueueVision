@@ -110,6 +110,7 @@ class JobManager:
         self._cond = threading.Condition()
         self._pending: deque[int] = deque()
         self._current: int | None = None
+        self._held = False  # a live session holds uploads: queued jobs wait
         self._cancel_current = threading.Event()
         self._stop = threading.Event()
         self._ready = threading.Event()
@@ -179,6 +180,19 @@ class JobManager:
                 self._publish(video_id, status_message(video_id, record))
         return True
 
+    def hold_uploads(self) -> bool:
+        """Hold queued uploads for a live session; False (and nothing held) while a job is current."""
+        with self._cond:
+            if self._current is not None:
+                return False
+            self._held = True
+            return True
+
+    def release_uploads(self) -> None:
+        with self._cond:
+            self._held = False
+            self._cond.notify_all()
+
     @property
     def stopping(self) -> bool:
         """True once ``stop()`` was called."""
@@ -196,6 +210,12 @@ class JobManager:
     def live_state(self, video_id: int) -> dict | None:
         """The latest progress message body for a video, if any."""
         return self._live.get(video_id)
+
+    def set_live_state(self, video_id: int, message: dict) -> None:
+        self._live[video_id] = message
+
+    def clear_live_state(self, video_id: int) -> None:
+        self._live.pop(video_id, None)
 
     def wait_idle(self, timeout: float) -> bool:
         """True once nothing is queued and nothing is processing (for tests)."""
@@ -222,6 +242,10 @@ class JobManager:
 
         return queue, unsubscribe
 
+    def publish(self, video_id: int, message: dict) -> None:
+        """Fan a message out to the run's WebSocket subscribers (any thread)."""
+        self._publish(video_id, message)
+
     def _publish(self, video_id: int, message: dict) -> None:
         with self._subs_lock:
             entries = list(self._subs.get(video_id, ()))
@@ -240,7 +264,7 @@ class JobManager:
             self._ready.set()
             while True:
                 with self._cond:
-                    self._cond.wait_for(lambda: self._pending or self._stop.is_set())
+                    self._cond.wait_for(lambda: (self._pending and not self._held) or self._stop.is_set())
                     if self._stop.is_set():
                         return
                     self._current = self._pending.popleft()

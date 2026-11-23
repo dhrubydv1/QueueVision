@@ -128,6 +128,8 @@ class Session:
         self.events: list[dict] = []
         self.rows: list[dict] = []
         self.latest: FrameUpdate | None = None
+        self.seq = 0  # sequence number of the newest batch built
+        self.inflight: dict | None = None  # a batch the API has not accepted yet; resent unchanged
         self.next_second = 0
         now = clock()
         self.last_batch = now
@@ -142,12 +144,27 @@ class Session:
     def _frames(self) -> int:
         return 0 if self.latest is None else self.latest.frame_index + 1
 
+    def pending(self) -> bool:
+        return bool(self.events or self.rows or self.inflight)
+
     def send_batch(self) -> None:
-        update = self.latest
-        progress = None if update is None else progress_message(self.video_id, update)
+        """Send the unaccepted batch again, unchanged and with its own ``seq``, else build the next one."""
         self.last_batch = self.clock()
-        if self.client.batch(self.events, self.rows, progress, self._frames(), self._captured_at_unix()):
-            self.events, self.rows = [], []  # kept for the next attempt when the API did not accept it
+        if self.inflight is None:
+            update = self.latest
+            self.seq += 1
+            self.inflight = {
+                "events": self.events,
+                "rows": self.rows,
+                "progress": None if update is None else progress_message(self.video_id, update),
+                "frames": self._frames(),
+                "captured": self._captured_at_unix(),
+                "seq": self.seq,
+            }
+            self.events, self.rows = [], []
+        b = self.inflight
+        if self.client.batch(b["events"], b["rows"], b["progress"], b["frames"], b["captured"], b["seq"]):
+            self.inflight = None
 
     def heartbeat(self) -> None:
         self.last_heartbeat = self.clock()
@@ -263,8 +280,9 @@ def _run(args, env, client, tracker_factory, source_opener, run_live_fn, clock, 
         )
         if session.unreachable:
             return 3
-        if session.events or session.rows:
-            session.send_batch()
+        for _ in range(2):  # a batch still unaccepted, then whatever arrived behind it
+            if session.pending():
+                session.send_batch()
         client.final("completed", None, report)
         return 0
     except LiveSourceError as error:

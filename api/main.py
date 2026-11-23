@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from api import db
 from api.deps import open_db
 from api.jobs import JobManager, TrackerFactory, default_tracker_factory
-from api.routes import accuracy, cameras, health, preview, static, videos, websocket
+from api.routes import accuracy, cameras, health, ingest, preview, static, videos, websocket
 from api.routes.videos import MAX_VIDEO_ID, PART_SUFFIX, run_record  # noqa: F401  (re-exported)
 from api.settings import ApiSettings
 
@@ -55,6 +55,8 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
     app = FastAPI(title="QueueVision API", lifespan=lifespan)
     app.state.settings = settings
     app.state.jobs = jobs
+    app.state.ingest_seq = {}  # run id -> last stored batch seq
+    app.state.live = None  # the live supervisor (Task 6); None refuses all ingest
 
     @app.exception_handler(Exception)
     async def unexpected_error(request: Request, error: Exception) -> JSONResponse:
@@ -76,6 +78,7 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
     app.include_router(videos.mutation_router)
     app.include_router(websocket.router)
     app.include_router(accuracy.router)
+    app.include_router(ingest.router)
     app.include_router(videos.upload_router)
     static.mount_legacy(app)
     app.include_router(static.router)

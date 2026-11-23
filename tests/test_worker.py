@@ -356,3 +356,44 @@ def test_ctl_contract_mismatch_prints_error_not_traceback(capsys):
     garbled_call = lambda request, timeout=None: io.BytesIO(b"<html>")  # noqa: E731
     assert ctl.main(["status"], opener=garbled_call) == 1
     assert "error:" in capsys.readouterr().err
+
+
+def test_batch_seq_increments_and_retry_keeps_it(tmp_path):
+    clock = FakeClock()
+    rec = Recorder(clock)
+    failures = {"left": 1}
+    failed_seqs: list[int] = []
+
+    def flaky(request, timeout=None):
+        if request.full_url.endswith("/batch") and failures["left"]:
+            failures["left"] -= 1
+            failed_seqs.append(json.loads(request.data)["seq"])
+            rec.attempts.append("batch")
+            raise urllib.error.URLError("blip")
+        return rec(request, timeout)
+
+    stop = threading.Event()
+    assert run_main(tmp_path, clock, rec, StoppingSource(clock, stop, 3.5), stop, wall=lambda: 1.0) == 0
+    # sanity: the clean run numbers its batches 1, 2, 3, ...
+    seqs = [b["json"]["seq"] for b in rec.routes("batch")]
+    assert seqs == list(range(1, len(seqs) + 1)) and len(seqs) >= 3
+
+    clock = FakeClock()
+    rec = Recorder(clock)
+    stop = threading.Event()
+    code = main(
+        [*ARGS, str(tmp_path)],
+        ENV,
+        tracker_factory=FakeTracker,
+        source_opener=lambda live, env: StoppingSource(clock, stop, 3.5),
+        opener=flaky,
+        clock=clock,
+        sleep=clock.sleep,
+        stop=stop,
+    )
+    assert code == 0
+    accepted = [b["json"] for b in rec.routes("batch")]
+    assert [b["seq"] for b in accepted] == list(range(1, len(accepted) + 1))
+    assert failed_seqs == [1] and accepted[0]["seq"] == 1  # the retry reuses the failed batch's seq
+    assert rec.attempts.count("batch") == len(accepted) + 1  # one failed attempt, resent under seq 1
+    assert accepted[0]["progress"] is not None  # the retried batch is the original one, not a rebuilt one
