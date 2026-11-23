@@ -68,7 +68,14 @@ def test_real_worker_on_looped_clip(real_server) -> None:
     response = server.start_live("cad_seq25")
     assert response.status_code == 201
     video_id = response.json()["video_id"]
-    time.sleep(20)  # a 20 s session; model load time is included
+    cap = time.time() + 60  # poll for the frame floor (model load time included) instead of a fixed sleep
+    frames = 0
+    while time.time() < cap:
+        frames = server.http.get(f"/api/videos/{video_id}").json()["frames_processed"] or 0
+        if frames >= 150:
+            break
+        time.sleep(0.5)
+    assert frames >= 150, f"only {frames} frames processed within 60 s"
     assert server.http.post(f"/api/videos/{video_id}/stop").status_code == 200
     deadline = time.time() + 60
     run = server.http.get(f"/api/videos/{video_id}").json()
