@@ -161,8 +161,7 @@ change no product code; the script starts the API through its own `--internal-ap
 - **Dashboard camera pages** (the design's session 3): a camera list from `GET /api/cameras` (`live_source`, `live_ready`), start and stop buttons calling the routes above, a mapping from the `409` reasons to plain
   sentences, and the Live page's Cancel button (which already works through `cancel`).
 - **The webcam run** by a person (draw the zone, grant the permission, measure it), and the real-browser check, before anything is shown to an audience as a webcam demo.
-- **A decision on the deferred minors** below, in particular: a late first heartbeat consuming the stop budget (a stop during model load may end `stop_timeout`), a straggling batch landing after the final message,
-  and a permanently rejected batch blocking later ones. None breaks the demo; all matter for a pilot.
+- **A decision on the deferred minors** below, in particular: a late first heartbeat consuming the stop budget (a stop during model load may end `stop_timeout`), and a permanently rejected batch blocking later ones. None breaks the demo; all matter for a pilot.
 - **Pilot questions, not built:** reconnecting with backoff, restarting a dead worker, days-long runs, metrics export, and whether and how recording could be offered.
 - **Login and CSRF (session 4):** the ingest token and the loopback check are a local separation, not authentication; the start and stop routes have no login.
 
