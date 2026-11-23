@@ -89,6 +89,7 @@ class LiveSupervisor:
         self._halt = threading.Event()
         self._thread: threading.Thread | None = None
         self._app_state = None
+        self._closing = False  # shutdown began: the upload hold is never released again
         self.spawned: list[subprocess.Popen] = []  # every worker started (their ``args`` hold no secret)
 
     # --- start ---------------------------------------------------------------------------
@@ -216,7 +217,7 @@ class LiveSupervisor:
             session = self._sessions.pop(video_id, None)
             if session is None:
                 return
-            self.jobs.release_uploads()
+            self._release_uploads()
             self._retire(session.proc)
         session.finished.set()
 
@@ -305,8 +306,14 @@ class LiveSupervisor:
                 ingest_seq.pop(session.video_id, None)
             self.jobs.clear_live_state(session.video_id)
             self.jobs.preview.drop(session.video_id)
-            self.jobs.release_uploads()
+            self._release_uploads()
         session.finished.set()
+
+    def _release_uploads(self) -> None:
+        """Give queued uploads back, except at shutdown: they must not start loading a model then
+        (leftover queued uploads are failed as interrupted at the next start)."""
+        if not self._closing:
+            self.jobs.release_uploads()
 
     def attach(self, state) -> None:
         """Give the supervisor the app's ``state`` (it pops ``ingest_seq`` entries of runs it ends)."""
@@ -369,6 +376,7 @@ class LiveSupervisor:
     def shutdown(self) -> None:
         """Stop every session and reap every worker. Safe to call twice."""
         with self._lock:
+            self._closing = True
             sessions = list(self._sessions.values())
             for session in sessions:
                 session.stopping = True
@@ -395,4 +403,3 @@ class LiveSupervisor:
                 with contextlib.suppress(Exception):
                     proc.kill()
                     proc.wait(timeout=5)
-        self.jobs.release_uploads()

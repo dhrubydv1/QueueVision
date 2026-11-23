@@ -547,6 +547,7 @@ While a session runs, uploads can still be submitted but stay `queued`; they sta
 | `failed` | `no_heartbeat` | No heartbeat for 10 s once frames flow; until a heartbeat or batch reports `frames_processed > 0`, 60 s from start are allowed (model load and source open send no beats); the worker is killed |
 | `failed` | `stop_timeout` | A stop did not finish within 15 s; the worker was killed |
 | `failed` | `worker_start_failed` | See `spawn_failed` |
+| `completed` or `failed` | none or `worker_exited` or `server_shutdown` | A session that is live when the API stops: the worker is stopped and the run ends `worker_exited` or `server_shutdown` (or `completed` if its final arrived), with no report; uploads queued behind it stay queued and are failed as interrupted at the next start |
 
 An API restart marks every leftover `processing` live run `failed` (the existing start-up rule), and a worker
 whose API has gone away for 15 s exits by itself.

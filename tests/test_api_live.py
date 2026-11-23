@@ -321,6 +321,18 @@ def test_shutdown_stops_workers(make_server) -> None:
         conn.close()
 
 
+def test_upload_queued_during_session_does_not_start_at_shutdown(make_server, clip) -> None:
+    server = make_server()
+    server.start_live()
+    upload_id = queue_upload(server, clip)
+    server.stop()  # the lifespan shutdown: stops the session, then the jobs
+    conn = db.connect(server.settings.db_path)
+    try:
+        assert db.get_video(conn, upload_id)["status"] == "queued"  # never released, never started
+    finally:
+        conn.close()
+
+
 def test_supervisor_end_cleans_up(make_server, clip) -> None:
     server = make_server("silent", heartbeat_timeout_s=0.5, startup_grace_s=1.0)
     video_id = server.start_live().json()["video_id"]
