@@ -24,7 +24,20 @@ class CameraInfo(BaseModel):
     alerts_enabled: bool = False
     max_queue_length: float | None = None
     smoothing_window_s: float | None = None
+    live_source: Literal["webcam", "rtsp", "clip"] | None = None
+    live_ready: bool = False
     error: str | None = None
+
+
+class LiveSession(BaseModel):
+    """A running live camera session; ``heartbeat_age_s`` is null until the worker's first heartbeat."""
+
+    video_id: int
+    camera_id: str
+    source_kind: Literal["webcam", "rtsp", "clip"]
+    started_at: str | None = None
+    heartbeat_age_s: float | None = None
+    processing_fps: float | None = None
 
 
 class RunOptions(BaseModel):
@@ -35,6 +48,7 @@ class RunOptions(BaseModel):
     preview_privacy_mode: Literal["boxes", "frame"] | None = None
     max_frames: int | None = None
     realtime: bool = False
+    process_fps: float | None = None
 
 
 class Run(BaseModel):
@@ -43,6 +57,8 @@ class Run(BaseModel):
     video_id: int
     original_name: str
     camera_id: str
+    kind: Literal["upload", "live"] = "upload"
+    source_kind: Literal["webcam", "rtsp", "clip"] | None = None
     status: str
     error: str | None = None
     options: RunOptions

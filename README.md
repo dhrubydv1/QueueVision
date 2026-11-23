@@ -393,6 +393,27 @@ do not yet accept the newer ones.
 
 Sprint 7 session 2 report: [docs/sprint7_session2_report.md](docs/sprint7_session2_report.md).
 
+## 9d. Live cameras (Sprint 8 session 2)
+
+A camera YAML with a `live:` section can be started as a live session: a webcam, an RTSP stream (the URL is read
+from the environment variable named in `live.rtsp_url_env`, never from the YAML) or a recorded clip looped at its
+own frame rate (the stand-in camera, `configs/cameras/cad_seq25.yaml`). With the API running:
+
+```bash
+python -m worker.ctl start cad_seq25     # prints the video id and the Live page (/live?id=N)
+python -m worker.ctl status
+python -m worker.ctl stop cad_seq25      # the run ends completed and opens as a recorded run
+```
+
+Each camera runs in its own process (`python -m worker`), started and watched by the API. Nothing is recorded: the
+output is the time series, events and a metrics JSON, plus a privacy-rendered preview held in memory. Queue numbers
+from a looped clip are not accuracy figures. The webcam (`configs/cameras/webcam.yaml`) has a placeholder zone;
+draw the real one with `python ai_engine/tools/draw_zone.py --video 0 --config configs/cameras/webcam.yaml`
+first. The webcam run has not been done by a person yet. Measurements: `python scripts/measure_live.py --camera
+cad_seq25 --seconds 120`. Routes, `409` reasons and ingest: [docs/api.md](docs/api.md); design and measurements:
+[docs/architecture.md](docs/architecture.md), [docs/testing_report.md](docs/testing_report.md),
+[docs/sprint8_session2_report.md](docs/sprint8_session2_report.md).
+
 ## 9b. Sprint 5: replay, stitching evaluation, dataset checks, benchmark
 
 ```bash
@@ -788,7 +809,7 @@ Ruff is configured in `pyproject.toml`.
 | **5 (done)** | Accuracy and validation: opt-in queue-logic variants, replay, stitching evaluation, dataset checks and benchmarks |
 | **6 (done)** | Queue-count error attribution, parameter experiments and waiting-time annotation kit |
 | **7 (done)** | Next.js dashboard, recorded-run live monitoring, analytics and historical reports |
-| 8 (next) | Live webcam/RTSP workers, authentication and permitted own-footage intake; requires real-camera and browser validation |
+| 8 (in progress) | Live cameras: session 1 (cleanup) done; **session 2 (camera engine and API) done except the pending items**: worker processes, `kind='live'` runs, looped-clip stand-in camera, ingest, supervisor, `python -m worker.ctl`; webcam run and real-browser check pending a person (see [docs/sprint8_session2_report.md](docs/sprint8_session2_report.md)). Still to do: dashboard camera pages, authentication, own-footage intake |
 
 ## Legacy prototype
 

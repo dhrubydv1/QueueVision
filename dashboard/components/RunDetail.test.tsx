@@ -180,4 +180,32 @@ describe("RunDetail", () => {
     expect(await screen.findByRole("button", { name: "Delete" })).toBeDisabled();
     expect(container.querySelector("video")).toBeNull();
   });
+
+  it("shows the live note and no video for a live run", async () => {
+    vi.mocked(api.getRun).mockResolvedValue(
+      run({ kind: "live", source_kind: "clip", options: { blur_heads: false, frame_stride: 1, realtime: true, process_fps: 10 } }) as never,
+    );
+    const { container } = view();
+    expect(await screen.findByText("Live session — no video recorded")).toBeInTheDocument();
+    expect(container.querySelector("video")).toBeNull();
+    expect(screen.getByText("live · clip · 10 fps processed")).toBeInTheDocument();
+    expect(screen.queryByText(/head/)).toBeNull();
+    expect(screen.getByRole("link", { name: "Time series (CSV)" })).toBeInTheDocument();
+  });
+
+  it("upload run unchanged", async () => {
+    vi.mocked(api.getRun).mockResolvedValue(run({ kind: "upload" }) as never);
+    const { container } = view();
+    expect(await screen.findByText("every 2nd frame · heads blurred · fast")).toBeInTheDocument();
+    expect(container.querySelector("video")).not.toBeNull();
+    expect(screen.queryByText("Live session — no video recorded")).toBeNull();
+  });
+
+  it("run without kind (older API) unchanged", async () => {
+    vi.mocked(api.getRun).mockResolvedValue(run() as never);
+    const { container } = view();
+    expect(await screen.findByText("every 2nd frame · heads blurred · fast")).toBeInTheDocument();
+    expect(container.querySelector("video")).not.toBeNull();
+    expect(screen.queryByText("Live session — no video recorded")).toBeNull();
+  });
 });

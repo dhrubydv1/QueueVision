@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cameras/{camera_id}/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Live */
+        post: operations["start_live_api_cameras__camera_id__live_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -47,6 +64,23 @@ export interface paths {
         };
         /** Health */
         get: operations["health_api_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Live Sessions */
+        get: operations["live_sessions_api_live_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -210,6 +244,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/videos/{video_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop */
+        post: operations["stop_api_videos__video_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/videos/{video_id}/timeseries": {
         parameters: {
             query?: never;
@@ -367,6 +418,13 @@ export interface components {
             has_service_point: boolean;
             /** Id */
             id: string;
+            /**
+             * Live Ready
+             * @default false
+             */
+            live_ready: boolean;
+            /** Live Source */
+            live_source?: ("webcam" | "rtsp" | "clip") | null;
             /** Max Queue Length */
             max_queue_length?: number | null;
             /** Smoothing Window S */
@@ -391,6 +449,27 @@ export interface components {
             status: string;
         };
         /**
+         * LiveSession
+         * @description A running live camera session; ``heartbeat_age_s`` is null until the worker's first heartbeat.
+         */
+        LiveSession: {
+            /** Camera Id */
+            camera_id: string;
+            /** Heartbeat Age S */
+            heartbeat_age_s?: number | null;
+            /** Processing Fps */
+            processing_fps?: number | null;
+            /**
+             * Source Kind
+             * @enum {string}
+             */
+            source_kind: "webcam" | "rtsp" | "clip";
+            /** Started At */
+            started_at?: string | null;
+            /** Video Id */
+            video_id: number;
+        };
+        /**
          * Run
          * @description A run record: status, progress, options, timings and the queue summary.
          */
@@ -412,11 +491,19 @@ export interface components {
             frames_processed: number;
             /** Frames Total */
             frames_total?: number | null;
+            /**
+             * Kind
+             * @default upload
+             * @enum {string}
+             */
+            kind: "upload" | "live";
             options: components["schemas"]["RunOptions"];
             /** Original Name */
             original_name: string;
             /** Percent */
             percent?: number | null;
+            /** Source Kind */
+            source_kind?: ("webcam" | "rtsp" | "clip") | null;
             /** Started At */
             started_at?: string | null;
             /** Status */
@@ -446,6 +533,8 @@ export interface components {
             preview_privacy_mode?: ("boxes" | "frame") | null;
             /** Privacy Mode */
             privacy_mode?: ("none" | "boxes" | "frame") | null;
+            /** Process Fps */
+            process_fps?: number | null;
             /**
              * Realtime
              * @default false
@@ -558,6 +647,37 @@ export interface operations {
             };
         };
     };
+    start_live_api_cameras__camera_id__live_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                camera_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     health_api_health_get: {
         parameters: {
             query?: never;
@@ -574,6 +694,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Health"];
+                };
+            };
+        };
+    };
+    live_sessions_api_live_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveSession"][];
                 };
             };
         };
@@ -904,6 +1044,37 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_api_videos__video_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                video_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
                 };
             };
             /** @description Validation Error */

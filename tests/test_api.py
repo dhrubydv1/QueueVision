@@ -505,3 +505,57 @@ def test_old_run_options_report_null_privacy_modes(settings) -> None:
         options = client.get(f"/api/videos/{video_id}").json()["options"]
         assert options["privacy_mode"] is None and options["preview_privacy_mode"] is None
         assert options["blur_heads"] is True and options["frame_stride"] == 1
+
+
+def test_run_record_has_kind(settings, clip) -> None:
+    with make_client(settings) as client:
+        video_id = upload(client, clip).json()["video_id"]
+        run = wait_status(client, video_id)
+        assert client.get(f"/api/videos/{video_id}").json()["kind"] == "upload"
+        assert run["kind"] == "upload" and run["source_kind"] is None
+        assert run["options"]["process_fps"] is None
+        for key in (
+            "video_id",
+            "original_name",
+            "camera_id",
+            "status",
+            "error",
+            "options",
+            "fps",
+            "frames_total",
+            "frames_processed",
+            "percent",
+            "created_at",
+            "started_at",
+            "finished_at",
+            "summary",
+        ):
+            assert key in run
+
+
+def test_cameras_lists_live_fields(settings, monkeypatch) -> None:
+    cams_dir = settings.camera_dir
+    zone = "queue_zone: [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]]\n"
+    (cams_dir / "webcam.yaml").write_text(f"camera_id: webcam\n{zone}live:\n  source: webcam\n")
+    (cams_dir / "stand_in.yaml").write_text(
+        f"camera_id: stand_in\n{zone}live:\n  source: clip\n  clip: datasets/raw/cad_seq25.mp4\n"
+    )
+    (cams_dir / "gone.yaml").write_text(
+        f"camera_id: gone\n{zone}live:\n  source: clip\n  clip: datasets/raw/does_not_exist.mp4\n"
+    )
+    (cams_dir / "door.yaml").write_text(
+        f"camera_id: door\n{zone}live:\n  source: rtsp\n  rtsp_url_env: QV_TEST_RTSP\n"
+    )
+    monkeypatch.delenv("QV_TEST_RTSP", raising=False)
+    with make_client(settings) as client:
+        cams = {c["id"]: c for c in client.get("/api/cameras").json()}
+        assert cams["walker"]["live_source"] is None and cams["walker"]["live_ready"] is False
+        assert cams["webcam"]["live_source"] == "webcam" and cams["webcam"]["live_ready"] is True
+        expected = (Path(__file__).resolve().parent.parent / "datasets/raw/cad_seq25.mp4").is_file()
+        assert cams["stand_in"]["live_source"] == "clip" and cams["stand_in"]["live_ready"] is expected
+        assert cams["gone"]["live_ready"] is False
+        assert cams["door"]["live_source"] == "rtsp" and cams["door"]["live_ready"] is False
+        monkeypatch.setenv("QV_TEST_RTSP", "rtsp://user:secret@host/x")
+        response = client.get("/api/cameras")
+        assert {c["id"]: c for c in response.json()}["door"]["live_ready"] is True
+        assert "secret" not in response.text and "rtsp://" not in response.text

@@ -75,6 +75,13 @@ class PreviewStore:
             self._frames[video_id] = (sequence, buffer.tobytes())
         return True
 
+    def offer_jpeg(self, video_id: int, jpeg: bytes) -> None:
+        """Store an already encoded, already private JPEG (live worker); numbered like ``offer``."""
+        with self._lock:
+            sequence = self._frames.get(video_id, (0, b""))[0] + 1
+            self._frames[video_id] = (sequence, jpeg)
+            self._last_encode.setdefault(video_id, float("-inf"))
+
     def latest(self, video_id: int) -> tuple[int, bytes] | None:
         with self._lock:
             return self._frames.get(video_id)

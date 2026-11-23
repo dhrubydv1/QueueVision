@@ -1,0 +1,12 @@
+"""``python -m worker --video-id N --camera ID --api URL --output-dir PATH`` (token in env only)."""
+
+from __future__ import annotations
+
+import logging
+import sys
+
+from worker.session import main
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    sys.exit(main(sys.argv[1:]))

@@ -13,6 +13,7 @@ from starlette.requests import HTTPConnection
 
 from api import db
 from api.jobs import JobManager
+from api.live import LiveSupervisor
 from api.settings import ApiSettings
 
 LOGGER = logging.getLogger("queuevision.api")
@@ -30,8 +31,13 @@ async def get_preview(conn: HTTPConnection):
     return conn.app.state.jobs.preview
 
 
+async def get_live(conn: HTTPConnection) -> LiveSupervisor:
+    return conn.app.state.live
+
+
 SettingsDep = Annotated[ApiSettings, Depends(get_settings)]
 JobsDep = Annotated[JobManager, Depends(get_jobs)]
+LiveDep = Annotated[LiveSupervisor, Depends(get_live)]
 
 
 @contextlib.contextmanager

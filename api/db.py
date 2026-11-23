@@ -128,8 +128,17 @@ def _migrate_1_to_2(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE alerts ADD COLUMN acknowledged_by TEXT")
 
 
+def _migrate_2_to_3(conn: sqlite3.Connection) -> None:
+    """Live cameras: what kind of run a video row is, and (for live runs) its source kind."""
+    conn.execute("ALTER TABLE videos ADD COLUMN kind TEXT NOT NULL DEFAULT 'upload'")
+    conn.execute("ALTER TABLE videos ADD COLUMN source_kind TEXT")
+
+
 # (target version, migration from the previous version). Append only; versions are consecutive from 2.
-MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [(2, _migrate_1_to_2)]
+MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
+    (2, _migrate_1_to_2),
+    (3, _migrate_2_to_3),
+]
 
 
 def _read_version(conn: sqlite3.Connection) -> int | None:
@@ -228,12 +237,20 @@ def acknowledge_alert(conn: sqlite3.Connection, video_id: int, alert_id: int) ->
     return dict(row) if row else None
 
 
-def create_video(conn: sqlite3.Connection, original_name: str, camera_id: str, options: dict) -> int:
+def create_video(
+    conn: sqlite3.Connection,
+    original_name: str,
+    camera_id: str,
+    options: dict,
+    *,
+    kind: str = "upload",
+    source_kind: str | None = None,
+) -> int:
     with conn:
         cur = conn.execute(
-            "INSERT INTO videos (original_name, camera_id, status, options, created_at)"
-            " VALUES (?, ?, 'queued', ?, ?)",
-            (original_name, camera_id, json.dumps(options), _now()),
+            "INSERT INTO videos (original_name, camera_id, status, options, created_at, kind, source_kind)"
+            " VALUES (?, ?, 'queued', ?, ?, ?, ?)",
+            (original_name, camera_id, json.dumps(options), _now(), kind, source_kind),
         )
     return int(cur.lastrowid)
 

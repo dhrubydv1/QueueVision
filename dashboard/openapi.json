@@ -181,6 +181,27 @@
             "title": "Id",
             "type": "string"
           },
+          "live_ready": {
+            "default": false,
+            "title": "Live Ready",
+            "type": "boolean"
+          },
+          "live_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "webcam",
+                  "rtsp",
+                  "clip"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Source"
+          },
           "max_queue_length": {
             "anyOf": [
               {
@@ -263,6 +284,68 @@
         "title": "Health",
         "type": "object"
       },
+      "LiveSession": {
+        "description": "A running live camera session; ``heartbeat_age_s`` is null until the worker's first heartbeat.",
+        "properties": {
+          "camera_id": {
+            "title": "Camera Id",
+            "type": "string"
+          },
+          "heartbeat_age_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heartbeat Age S"
+          },
+          "processing_fps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processing Fps"
+          },
+          "source_kind": {
+            "enum": [
+              "webcam",
+              "rtsp",
+              "clip"
+            ],
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "video_id": {
+            "title": "Video Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "video_id",
+          "camera_id",
+          "source_kind"
+        ],
+        "title": "LiveSession",
+        "type": "object"
+      },
       "Run": {
         "description": "A run record: status, progress, options, timings and the queue summary.",
         "properties": {
@@ -323,6 +406,15 @@
             ],
             "title": "Frames Total"
           },
+          "kind": {
+            "default": "upload",
+            "enum": [
+              "upload",
+              "live"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
           "options": {
             "$ref": "#/components/schemas/RunOptions"
           },
@@ -340,6 +432,22 @@
               }
             ],
             "title": "Percent"
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "webcam",
+                  "rtsp",
+                  "clip"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Kind"
           },
           "started_at": {
             "anyOf": [
@@ -437,6 +545,17 @@
               }
             ],
             "title": "Privacy Mode"
+          },
+          "process_fps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Process Fps"
           },
           "realtime": {
             "default": false,
@@ -716,6 +835,45 @@
         "summary": "Cameras"
       }
     },
+    "/api/cameras/{camera_id}/live": {
+      "post": {
+        "operationId": "start_live_api_cameras__camera_id__live_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "camera_id",
+            "required": true,
+            "schema": {
+              "title": "Camera Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Live"
+      }
+    },
     "/api/health": {
       "get": {
         "operationId": "health_api_health_get",
@@ -732,6 +890,28 @@
           }
         },
         "summary": "Health"
+      }
+    },
+    "/api/live": {
+      "get": {
+        "operationId": "live_sessions_api_live_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LiveSession"
+                  },
+                  "title": "Response Live Sessions Api Live Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Live Sessions"
       }
     },
     "/api/videos": {
@@ -1207,6 +1387,47 @@
           }
         },
         "summary": "Report"
+      }
+    },
+    "/api/videos/{video_id}/stop": {
+      "post": {
+        "operationId": "stop_api_videos__video_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Video Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop"
       }
     },
     "/api/videos/{video_id}/timeseries": {

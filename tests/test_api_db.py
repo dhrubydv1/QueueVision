@@ -43,7 +43,7 @@ def _count(conn, table):
 def test_init_twice_and_schema_version(conn):
     db.init_db(conn)
     rows = conn.execute("SELECT key, value FROM schema_meta").fetchall()
-    assert [(r["key"], r["value"]) for r in rows] == [("schema_version", "2")]
+    assert [(r["key"], r["value"]) for r in rows] == [("schema_version", "3")]
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 
@@ -207,7 +207,7 @@ def test_fresh_database_is_latest_without_backup(tmp_path):
     path = tmp_path / "queuevision.db"
     conn = db.connect(path)
     db.init_db(conn)
-    assert _version(conn) == str(db.MIGRATIONS[-1][0]) == "2"
+    assert _version(conn) == str(db.MIGRATIONS[-1][0]) == "3"
     assert {"acknowledged_at", "acknowledged_by"} <= set(_columns(conn))
     assert _backups(path) == []
     conn.close()
@@ -217,7 +217,7 @@ def test_migrates_v1_database_keeping_rows_and_backing_up(tmp_path):
     path = _v1_db(tmp_path)
     conn = db.connect(path)
     db.init_db(conn)
-    assert _version(conn) == "2"
+    assert _version(conn) == "3"
     assert {"acknowledged_at", "acknowledged_by"} <= set(_columns(conn))
     alert = db.list_alerts(conn, 1)[0]
     assert (alert["event_type"], alert["queue_length"], alert["predicted_wait_s"]) == (
@@ -237,6 +237,41 @@ def test_migrates_v1_database_keeping_rows_and_backing_up(tmp_path):
     conn.close()
 
 
+def _v2_db(tmp_path):
+    path = _v1_db(tmp_path)
+    conn = db.connect(path)
+    conn.execute("ALTER TABLE alerts ADD COLUMN acknowledged_at TEXT")
+    conn.execute("ALTER TABLE alerts ADD COLUMN acknowledged_by TEXT")
+    conn.execute("UPDATE schema_meta SET value = '2' WHERE key = 'schema_version'")
+    conn.execute(
+        "INSERT INTO videos (original_name, camera_id, status, options, created_at)"
+        " VALUES ('v2.mp4', 'cam1', 'completed', '{}', '2026-01-01T00:00:00+00:00')"
+    )
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_migrate_2_to_3_adds_kind_and_backs_up(tmp_path):
+    path = _v2_db(tmp_path)
+    conn = db.connect(path)
+    db.init_db(conn)
+    assert _version(conn) == "3"
+    row = conn.execute("SELECT kind, source_kind FROM videos WHERE original_name = 'v2.mp4'").fetchone()
+    assert row["kind"] == "upload" and row["source_kind"] is None
+    (backup,) = _backups(path)
+    assert re.fullmatch(r"queuevision\.db\.bak-v2-\d{8}T\d{6}Z", backup.name)
+    conn.close()
+
+
+def test_create_video_live_kind(conn):
+    vid = db.create_video(conn, "cam", "cam1", {}, kind="live", source_kind="clip")
+    row = db.get_video(conn, vid)
+    assert (row["kind"], row["source_kind"]) == ("live", "clip")
+    plain = db.get_video(conn, db.create_video(conn, "a.mp4", "cam1", {}))
+    assert (plain["kind"], plain["source_kind"]) == ("upload", None)
+
+
 def test_second_init_is_a_noop(tmp_path):
     path = _v1_db(tmp_path)
     conn = db.connect(path)
@@ -247,7 +282,7 @@ def test_second_init_is_a_noop(tmp_path):
     conn = db.connect(path)
     db.init_db(conn)
     assert _backups(path) == before and len(before) == 1
-    assert _version(conn) == "2"
+    assert _version(conn) == "3"
     conn.close()
 
 
@@ -312,7 +347,7 @@ def test_second_connection_migrating_after_stale_version_read(tmp_path, monkeypa
 
     monkeypatch.setattr(db, "_read_version", stale_read)
     db.init_db(a)
-    assert _version(a) == "2" and _columns(a).count("acknowledged_at") == 1
+    assert _version(a) == "3" and _columns(a).count("acknowledged_at") == 1
     assert len(_backups(path)) == 1
     a.close()
     b.close()
@@ -339,7 +374,7 @@ def test_concurrent_init_db_threads_migrate_once(tmp_path):
         t.join()
     assert errors == []
     check = db.connect(path)
-    assert _version(check) == "2" and len(_backups(path)) == 1
+    assert _version(check) == "3" and len(_backups(path)) == 1
     check.close()
 
 

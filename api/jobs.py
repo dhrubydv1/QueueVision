@@ -20,6 +20,7 @@ import cv2
 
 from ai_engine import config
 from ai_engine.queue.camera_config import load_camera_config
+from ai_engine.run_messages import SCHEMA_VERSION, event_message, progress_message, timeseries_row
 from ai_engine.run_tracking import FrameUpdate, RunOptions, process_video
 from api import db
 from api.preview import PreviewStore
@@ -27,7 +28,6 @@ from api.settings import ApiSettings
 
 LOGGER = logging.getLogger("queuevision.api")
 
-SCHEMA_VERSION = "1.0"
 # start() must outwait a worker blocked on a SQLite write lock (busy timeout), or it would be declared failed.
 READY_TIMEOUT_S = db.BUSY_TIMEOUT_S + 15.0
 SUBSCRIBER_QUEUE_SIZE = 256  # progress backlog bound; event/status messages are never dropped
@@ -61,57 +61,9 @@ def default_tracker_factory(settings: ApiSettings) -> TrackerFactory:
 
 # --- messages ----------------------------------------------------------------
 
-
-def _round(value: float | None, digits: int) -> float | None:
-    return None if value is None else round(value, digits)
-
-
-def progress_message(video_id: int, update: FrameUpdate) -> dict[str, Any]:
-    """Live numbers for one frame (sent about once per video second)."""
-    queue = update.queue
-    total = update.frames_total
-    frames_done = update.frame_index + 1  # source frames, matching the overlay's frame number
-    percent = min(100.0, round(100.0 * frames_done / total, 1)) if total else None
-    message: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
-        "type": "progress",
-        "video_id": video_id,
-        "frames_processed": frames_done,
-        "frames_total": total,
-        "percent": percent,
-        "video_time_s": round(update.timestamp_s, 3),
-        "people_in_frame": update.people_in_frame,
-        "processing_fps": round(update.processing_fps, 2),
-        "queue_length": None,
-        "raw_queue_count": None,
-        "service_rate_per_min": None,
-        "service_rate_status": None,
-        "predicted_wait_s": None,
-        "predicted_wait_low_s": None,
-        "predicted_wait_high_s": None,
-        "prediction_status": None,
-        "alert_active": False,
-        "alert_reasons": [],
-    }
-    if queue is not None:
-        message.update(
-            queue_length=queue.queue_length,
-            raw_queue_count=queue.raw_count,
-            service_rate_per_min=_round(queue.service_rate.per_min, 3),
-            service_rate_status=queue.service_rate.status,
-            predicted_wait_s=_round(queue.prediction.predicted_wait_s, 1),
-            predicted_wait_low_s=_round(queue.prediction.low_s, 1),
-            predicted_wait_high_s=_round(queue.prediction.high_s, 1),
-            prediction_status=queue.prediction.status,
-            alert_active=queue.alert_active,
-            alert_reasons=list(queue.alert_reasons),
-        )
-    return message
-
-
-def event_message(video_id: int, event: dict) -> dict[str, Any]:
-    """One queue event; ``event`` is the event's ``to_dict()`` payload, unchanged."""
-    return {"schema_version": SCHEMA_VERSION, "type": "event", "video_id": video_id, "event": event}
+_timeseries_row = (
+    timeseries_row  # historical name; progress_message and event_message live in ai_engine.run_messages
+)
 
 
 def status_message(video_id: int, record: dict) -> dict[str, Any]:
@@ -126,26 +78,6 @@ def status_message(video_id: int, record: dict) -> dict[str, Any]:
         "frames_total": record.get("frames_total"),
         "started_at": record.get("started_at"),
         "finished_at": record.get("finished_at"),
-    }
-
-
-def _timeseries_row(update: FrameUpdate) -> dict[str, Any]:
-    """One time-series row; missing values are None (same fields and rounding as the CSV)."""
-    queue = update.queue
-    assert queue is not None
-    rate, prediction = queue.service_rate, queue.prediction
-    return {
-        "time_s": round(update.timestamp_s, 3),
-        "frame": update.frame_index,
-        "people_in_frame": update.people_in_frame,
-        "raw_queue_count": queue.raw_count,
-        "queue_length": queue.queue_length,
-        "service_rate_per_min": _round(rate.per_min, 3),
-        "service_rate_status": rate.status,
-        "predicted_wait_s": _round(prediction.predicted_wait_s, 1),
-        "predicted_wait_low_s": _round(prediction.low_s, 1),
-        "predicted_wait_high_s": _round(prediction.high_s, 1),
-        "prediction_status": prediction.status,
     }
 
 
@@ -178,6 +110,7 @@ class JobManager:
         self._cond = threading.Condition()
         self._pending: deque[int] = deque()
         self._current: int | None = None
+        self._held = False  # a live session holds uploads: queued jobs wait
         self._cancel_current = threading.Event()
         self._stop = threading.Event()
         self._ready = threading.Event()
@@ -247,6 +180,19 @@ class JobManager:
                 self._publish(video_id, status_message(video_id, record))
         return True
 
+    def hold_uploads(self) -> bool:
+        """Hold queued uploads for a live session; False (and nothing held) while a job is current."""
+        with self._cond:
+            if self._current is not None:
+                return False
+            self._held = True
+            return True
+
+    def release_uploads(self) -> None:
+        with self._cond:
+            self._held = False
+            self._cond.notify_all()
+
     @property
     def stopping(self) -> bool:
         """True once ``stop()`` was called."""
@@ -264,6 +210,12 @@ class JobManager:
     def live_state(self, video_id: int) -> dict | None:
         """The latest progress message body for a video, if any."""
         return self._live.get(video_id)
+
+    def set_live_state(self, video_id: int, message: dict) -> None:
+        self._live[video_id] = message
+
+    def clear_live_state(self, video_id: int) -> None:
+        self._live.pop(video_id, None)
 
     def wait_idle(self, timeout: float) -> bool:
         """True once nothing is queued and nothing is processing (for tests)."""
@@ -290,6 +242,10 @@ class JobManager:
 
         return queue, unsubscribe
 
+    def publish(self, video_id: int, message: dict) -> None:
+        """Fan a message out to the run's WebSocket subscribers (any thread)."""
+        self._publish(video_id, message)
+
     def _publish(self, video_id: int, message: dict) -> None:
         with self._subs_lock:
             entries = list(self._subs.get(video_id, ()))
@@ -308,7 +264,7 @@ class JobManager:
             self._ready.set()
             while True:
                 with self._cond:
-                    self._cond.wait_for(lambda: self._pending or self._stop.is_set())
+                    self._cond.wait_for(lambda: (self._pending and not self._held) or self._stop.is_set())
                     if self._stop.is_set():
                         return
                     self._current = self._pending.popleft()
@@ -414,7 +370,7 @@ class JobManager:
             if update.timestamp_s + 1e-9 >= state["next_second"]:
                 state["next_second"] = math.floor(update.timestamp_s + 1e-9) + 1
                 if queue is not None:
-                    rows.append(_timeseries_row(update))
+                    rows.append(timeseries_row(update))
                 flush()
                 message = progress_message(video_id, update)
                 self._live[video_id] = message

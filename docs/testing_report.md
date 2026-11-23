@@ -1,9 +1,80 @@
 # Testing Report
 
-The fix-pass session 3 evidence (privacy modes, pacing experiments) comes first, then the fix-pass session 2 evidence (clip-bootstrap intervals, IoU 0.5/0.3 attribution, detector and tracker comparisons) comes first, then the Anonymous Bank call-centre results (predictor accuracy on real call-centre queues), then the Sprint 8 browser checklist (pending, for a person) and pacing investigation, then Sprint 7 (session 2) results, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
+The Sprint 8 session 2 evidence (live cameras) comes first, then the fix-pass session 3 evidence (privacy modes, pacing experiments), then the fix-pass session 2 evidence (clip-bootstrap intervals, IoU 0.5/0.3 attribution, detector and tracker comparisons), then the Anonymous Bank call-centre results (predictor accuracy on real call-centre queues), then the Sprint 8 browser checklist (pending, for a person) and pacing investigation, then Sprint 7 (session 2) results, then Sprints 6, 5, 4, 3 and 2; the Sprint 1 report is
 kept at the end. Every number here comes from a command that was actually run
 on the machine described under Sprint 2 (same environment). Nothing was
 estimated.
+
+## Sprint 8, session 2: live cameras (`sprint-8/cameras`, 2026-11-23)
+
+**Result in one sentence: a looped-clip live session runs end to end through the API with a real worker process (tests, e2e and measurements below); the webcam, real RTSP and a real-browser check have not been run and are pending a person.** The session summary, goal status and pending items are in [sprint8_session2_report.md](sprint8_session2_report.md); the routes are in [api.md](api.md) (section "Live cameras").
+
+Numbers below come from `outputs/s11_live/` (local, gitignored: `cad_seq25_120s_run{1,2,3}.json`, `soak_cad_seq25_1800s.json`) and from `outputs/s11_final_commands/`. **Queue numbers from the looped clip are not accuracy figures**: the clip restarts every few seconds with the tracker and queue state kept, so people jump back to where they started and cause false joins and leaves. They show that the system runs, not that it is right. No queue figure from these runs is quoted below except to show that events flow.
+
+### Tests (what each proves)
+
+Unit tests are torch-free (fake source, fake clock, fake tracker, fake HTTP, a tiny real fake-worker script that speaks the ingest protocol with no model). Counts are tests added in this session.
+
+| Area (file, tests) | What it proves |
+|---|---|
+| Schema v3 (`tests/test_api_db.py`, `tests/test_api.py`: 3 new, 4 version asserts changed) | Migration 2 to 3 adds `videos.kind` (default `upload`) and `videos.source_kind`, and backs the database up first; old rows read `kind: "upload"`; `create_video(kind="live")` works; the run record carries `kind` and `source_kind` |
+| Camera config (`tests/test_camera_config.py`, `tests/test_api.py`) | The optional `live:` section parses and validates (source, `rtsp_url_env` is a variable name not a URL, `process_fps` in (0, 30], preview mode `frame` or `boxes`, never `none`); `GET /api/cameras` gives `live_source` and `live_ready` and never a URL |
+| Sources (`tests/test_live_capture.py`, 11) | The looped clip keeps time increasing across loops and wraps when the reported frame count is too high; only the newest frame is kept; no first frame gives `camera_unavailable`, a later end gives `stream_ended`; `close()` stops the capture thread promptly; RTSP opens with the FFmpeg backend; no URL in an error or `repr` |
+| Live loop (`tests/test_live_loop.py`, 6) | `run_live` with fake source, tracker and clock processes at `process_fps`, numbers frames, stops on request and on `max_session_s`, writes only the time-series CSV and the metrics JSON (no image or video file), and the report has its fields and loop boundaries |
+| Worker (`tests/test_worker.py`, 19) | One batch per second with progress, rows and `seq`; a failed batch is resent unchanged; heartbeat when idle; preview rate limit; exits after 15 s without the API (fake clock) and sends no final; SIGTERM sends a `completed` final (also during start-up and while the source opens); an engine error or source error sends a `failed` final with a fixed reason and no URL; the token comes from the environment only; `python -m worker.ctl` start, stop, status and a contract mismatch |
+| Ingest (`tests/test_api_ingest.py`, 16) | Token required; a token of another run refused; a non-loopback client refused; unknown run `404`; an upload run or a finished run refused; preview size limit; a batch stores events, waits, alerts and time series, and publishes the same WebSocket shapes as a real-time upload; a duplicate `seq` is ignored; `final` sets the status and the report; the routes are not in OpenAPI |
+| Supervisor (`tests/test_api_live.py`, 15) | Start, stream and stop completes; every `409`; two concurrent starts, only one wins; stop during start-up and a second stop; cancel on a live run stops it; a crashed worker fails the run (`worker_exited`); a silent worker fails (`no_heartbeat`) and is killed; a deaf worker is killed after the stop timeout (`stop_timeout`); an upload queued during a session stays queued and completes after it, on every end path; a failed spawn releases the hold; a leftover live run is failed at start-up; shutdown stops workers; a fake RTSP URL (`rtsp://user:secret@...`) appears in none of the logs, API responses, database or worker argv |
+| Contract tests | Existing route responses unchanged apart from the new optional fields (the existing suite stayed green throughout); live and real-time-upload WebSocket messages have the same shapes |
+| Integration (`tests/test_live_integration.py`, marked `integration`) | A real worker with the real model on the looped clip, through the API: completed, at least 150 frames, loops recorded, time-series rows, only CSV, JSON and log files in the output folder, no video or image, the worker exits and none is left behind |
+| Vitest (`dashboard/components/RunDetail.test.tsx`, 3 new) | `kind: "live"` shows "Live session — no video recorded", no player and a live options line; `upload` or no `kind` is unchanged |
+| e2e (`dashboard/e2e/live.spec.ts`) | With the real API, real worker and looped clip: start a session, open `/live?id=N`, see the queue number and a loaded preview, stop it, see it `completed`, open the recorded run with the note and no player, and `timeseries.csv` returns `200`. Existing e2e stayed green: 16 tests = 8 specs x 2 browsers (chromium and webkit); the baseline 14 was 7 x 2 |
+
+The final run of every baseline command (`outputs/s11_final_commands/`) passed except the integration test run on its own, which failed its 150-frame floor (139 frames; a tight fixed-sleep margin on a loaded machine, passed inside the full `pytest -q`); counts are in the table "Baselines against final results" of the session report. Not tested: the real webcam (needs the macOS camera permission), real RTSP, a worker killed by the OS during model load, and a real-browser run of the live page (pending, below).
+
+### Measurements: method
+
+`scripts/measure_live.py --camera cad_seq25 --seconds 120` (three repeats) and `--seconds 1800 --name soak_cad_seq25_1800s` (one soak). The script starts one API child on port 8790 with `QUEUEVISION_DATA_DIR` set to a temporary folder, starts a session through `POST /api/cameras/cad_seq25/live` (looped `datasets/raw/cad_seq25.mp4`, `process_fps` 10, device `auto`), samples once per second, stops it through `POST /api/videos/{id}/stop`, stops the server and removes the folder. The product code is not changed for the measurement. Two small wrappers inside the script record what the product does not report: a worker wrapper times every `PersonTracker.update` call (detector plus tracker, the "update") and writes the timings and the worker's own `getrusage(RUSAGE_SELF)` (CPU time, `ru_maxrss`) at exit; an API wrapper around `api.routes.ingest._store_batch` records, per batch, the receipt time minus `captured_at_unix`, the number of events and the number of time-series rows, and the API's own `getrusage` at exit. **Capture-to-ingest latency is therefore computed from the batches, not logged** (no DEBUG line was added to `api/`, and no payload is logged). Peak RSS is `ru_maxrss` self-reported at exit. RSS over time comes from `ps -o rss=` once per second.
+
+The machine state is recorded at the start and the end of each run in the JSON (`machine_start`, `machine_end`: `pmset -g batt`, `uptime`, load average). **Conditions were not quiet:** all four runs were on AC power with the load average between 3.8 and 6.1 (other applications and a second `python -m api` of the user's were running), so the absolute times depend on that load.
+
+### Measurements: three 120 s repeats (`cad_seq25`, `outputs/s11_live/cad_seq25_120s_run{1,2,3}.json`)
+
+| Quantity | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| Frames processed (`run.frames_processed`) | 1156 | 1152 | 1156 |
+| Update median, p90 (ms; `worker.update.all`) | 37.1, 48.7 | 35.9, 45.5 | 37.1, 46.5 |
+| Update median, first / last 60 s (ms) | 36.9 / 37.1 | 36.0 / 35.7 | 37.8 / 36.8 |
+| Worker CPU, user + system (s over about 120 s wall; `worker.cpu_*`) | 268.0 + 19.0 | 265.8 + 17.8 | 267.6 + 18.4 |
+| Worker peak RSS (MB; `worker.peak_rss_mb`) | 516.9 | 534.1 | 518.3 |
+| API peak RSS (MB; `api.peak_rss_mb`) | 91.3 | 90.9 | 91.2 |
+| Capture-to-ingest median, p90, max (ms; `capture_to_ingest`) | 89.4, 176.7, 2669.5 | 78.2, 148.2, 2739.4 | 85.8, 159.6, 2675.1 |
+| Batches (rate per s) | 111 (0.92) | 113 (0.94) | 112 (0.93) |
+| Mean events / mean rows per batch | 1.88 / 1.06 | 2.05 / 1.04 | 1.95 / 1.05 |
+| Load average at start, end (1 min) | 4.6, 6.1 | 4.9, 4.5 | 3.8, 4.6 |
+| Power | AC, AC | AC, AC | AC, AC |
+
+Reading it: the worker keeps up with 10 processed frames per second (about 9.6 frames per second over the whole run, which includes about 2 s of model load and warm-up); the update median is about 36 to 37 ms, p90 about 45 to 49 ms, with no difference between the first and the last minute. Worker CPU of about 265 s of user time in 120 s of wall time means the worker uses about 2.4 cores' worth (PyTorch threads). The worker's peak RSS is about 520 MB, the API's about 91 MB, so a live session costs roughly 520 MB more than the API alone, in line with the 400.6 MB measured for the model in fix pass session 2 plus the capture buffers and the OpenCV runtime. The capture-to-ingest median is about 80 to 90 ms; the maximum of about 2.7 s is the first batch, which goes out while the model is warming up. Limits: the latency is the age of the newest frame when a batch is built (about once per second) at receipt, not the age of the oldest event in the batch; the number of timed updates is 1 to 3 above the frames processed (one is the warm-up call, the cause of the others was not investigated), which shifts the mean slightly and the median not at all; `ps` RSS is lower than `ru_maxrss` and falls after start-up because macOS compresses idle pages, so the `ps` series (`rss_over_time` in the JSON) shows trend and not the peak.
+
+### Measurements: 30-minute soak (`cad_seq25`, `outputs/s11_live/soak_cad_seq25_1800s.json`)
+
+One run of 1800.4 s, completed, 17954 frames processed, no worker left after the API exited. AC power at the start and the end; load average (1 / 5 / 15 min) 3.8 / 4.7 / 5.7 at the start and 5.8 / 9.8 / 8.9 at the end.
+
+| Quantity | First 60 s | Last 60 s |
+|---|---|---|
+| Update median, p90 (ms; `worker.update.first_window`, `last_window`) | 36.3, 46.4 | 38.8, 54.8 |
+| Update mean (ms) | 42.6 | 41.7 |
+| Worker `ps` RSS, mean of the window (MB; `rss_over_time.worker`) | 171.7 (includes the model load) | 121.8 |
+| Worker `ps` RSS, from `rss_samples_every_10s` (MB) | 111.8 (t = 120 to 180 s, after the load) | 122.0 (t = 1740 to 1800 s) |
+| API `ps` RSS, mean of the window (MB) | 35.4 | 27.5 |
+
+Whole run: update median 36.4 ms, p90 46.1 ms; worker CPU 4054.6 s user + 264.7 s system in 1800 s (about 2.4 cores' worth, the same as the 120 s runs); **worker peak RSS 501.7 MB** (`ru_maxrss`) against 517 to 534 MB in the 120 s runs, and API peak RSS 89.4 MB against 91 MB; 1721 batches (0.96 per second), mean 1.96 events and 1.04 rows per batch; capture-to-ingest median 79.8 ms, p90 153.7 ms, max 2831.9 ms (the first batch).
+
+Reading it: **memory did not grow in a way this run can show.** The peak RSS of the soak is not above the peaks of the 2-minute runs (which are reached during model load), and the `ps` series sits at 94.1 to 126.2 MB for the worker after the first two minutes (one 94.1 MB sample, the rest from about 110 MB up); the 10 MB difference between the 120 to 180 s and the last-minute means is within the spread of the early samples (117 to 122 MB between 20 and 70 s). The window means in the table use every second's sample; the `ps` values are lower than `ru_maxrss` because macOS compresses idle pages. **The update time did get somewhat slower: the last minute's median is 38.8 ms against 36.3 ms (+7%) and its p90 54.8 ms against 46.4 ms.** The machine was busier at the end (5-minute load average 9.8, from other applications), so this run cannot say whether the slowdown comes from the worker or from the machine; it is not repeated. Limits: one soak, on a loaded machine, a looped clip, no webcam; the `ps` series is a sample, not a peak.
+
+
+### Webcam measurement: pending, needs a person
+
+Not run. Opening the camera needs the macOS camera permission for the app that starts the process and nobody was present to answer the prompt. Command: `python scripts/measure_live.py --camera webcam --seconds 120` (after drawing the zone, see [demo.md](demo.md) section 6). It records the same quantities.
 
 ## Fix pass, session 3: privacy modes and pacing experiments (`fix/privacy-performance`, 2026-11-17)
 
