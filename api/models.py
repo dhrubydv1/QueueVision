@@ -29,6 +29,17 @@ class CameraInfo(BaseModel):
     error: str | None = None
 
 
+class LiveSession(BaseModel):
+    """A running live camera session; ``heartbeat_age_s`` is null until the worker's first heartbeat."""
+
+    video_id: int
+    camera_id: str
+    source_kind: Literal["webcam", "rtsp", "clip"]
+    started_at: str | None = None
+    heartbeat_age_s: float | None = None
+    processing_fps: float | None = None
+
+
 class RunOptions(BaseModel):
     frame_stride: int = 1
     blur_heads: bool = True

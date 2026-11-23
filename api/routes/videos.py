@@ -17,7 +17,7 @@ from fastapi.routing import APIRoute
 from ai_engine.queue.camera_config import CameraConfigError, load_camera_config
 from ai_engine.video.video_loader import SUPPORTED_VIDEO_EXTENSIONS
 from api import db
-from api.deps import JobsDep, SettingsDep, contained_path, get_record, open_db
+from api.deps import JobsDep, LiveDep, SettingsDep, contained_path, get_record, open_db
 from api.models import Alert, Run, TimeseriesRow, Wait
 from api.upload_validation import UploadRejected, sanitize_filename, validate_upload
 
@@ -231,10 +231,22 @@ def timeseries_csv(video_id: VideoId, settings: SettingsDep) -> FileResponse:
 
 
 @mutation_router.post("/api/videos/{video_id}/cancel", response_model=Run)
-def cancel(video_id: VideoId, settings: SettingsDep, jobs: JobsDep) -> dict:
-    get_record(settings, video_id)
+def cancel(video_id: VideoId, settings: SettingsDep, jobs: JobsDep, live: LiveDep) -> dict:
+    record = get_record(settings, video_id)
+    if record["kind"] == "live":  # a live run is ended by stopping its worker (it completes, not cancels)
+        if not live.stop(video_id):
+            raise HTTPException(409, "run is not live")
+        return run_record(get_record(settings, video_id))
     if not jobs.cancel(video_id):
         raise HTTPException(409, "run is not queued or processing")
+    return run_record(get_record(settings, video_id))
+
+
+@mutation_router.post("/api/videos/{video_id}/stop", response_model=Run)
+def stop(video_id: VideoId, settings: SettingsDep, live: LiveDep) -> dict:
+    get_record(settings, video_id)
+    if not live.stop(video_id):
+        raise HTTPException(409, "run is not live")
     return run_record(get_record(settings, video_id))
 
 

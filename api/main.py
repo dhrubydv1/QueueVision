@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from api import db
 from api.deps import open_db
 from api.jobs import JobManager, TrackerFactory, default_tracker_factory
+from api.live import LiveSupervisor
 from api.routes import accuracy, cameras, health, ingest, preview, static, videos, websocket
 from api.routes.videos import MAX_VIDEO_ID, PART_SUFFIX, run_record  # noqa: F401  (re-exported)
 from api.settings import ApiSettings
@@ -33,10 +34,15 @@ def remove_partial_uploads(uploads_dir: Path) -> int:
     return removed
 
 
-def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFactory | None = None) -> FastAPI:
+def create_app(
+    settings: ApiSettings | None = None,
+    tracker_factory: TrackerFactory | None = None,
+    live_options: dict | None = None,
+) -> FastAPI:
     settings = settings or ApiSettings.from_env()
     factory = tracker_factory or default_tracker_factory(settings)
     jobs = JobManager(settings, factory)
+    live = LiveSupervisor(settings, jobs, **(live_options or {}))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -50,13 +56,17 @@ def create_app(settings: ApiSettings | None = None, tracker_factory: TrackerFact
         try:
             yield
         finally:
-            await run_in_threadpool(jobs.stop, 30.0)
+            try:
+                await run_in_threadpool(live.shutdown)
+            finally:
+                await run_in_threadpool(jobs.stop, 30.0)
 
     app = FastAPI(title="QueueVision API", lifespan=lifespan)
     app.state.settings = settings
     app.state.jobs = jobs
     app.state.ingest_seq = {}  # run id -> last stored batch seq
-    app.state.live = None  # the live supervisor (Task 6); None refuses all ingest
+    app.state.live = live
+    live.attach(app.state)
 
     @app.exception_handler(Exception)
     async def unexpected_error(request: Request, error: Exception) -> JSONResponse:

@@ -132,10 +132,10 @@ def test_ingest_requires_token(settings, client) -> None:
     assert stored(settings, "events", video_id) == 0
 
 
-def test_ingest_without_supervisor_refused(settings) -> None:
+def test_ingest_without_session_refused(settings) -> None:
     video_id = make_run(settings)
     with TestClient(create_app(settings), client=LOOPBACK) as bare:
-        assert bare.app.state.live is None
+        assert bare.app.state.live.sessions() == []  # the real supervisor, with no session for this run
         assert (
             bare.post(f"/api/ingest/{video_id}/batch", headers=HEADERS, json=batch_body()).status_code == 401
         )

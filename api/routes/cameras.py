@@ -5,11 +5,14 @@ from __future__ import annotations
 import logging
 import os
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from ai_engine.queue.camera_config import CameraConfig, CameraConfigError, load_camera_config
-from api.deps import SettingsDep
-from api.models import CameraInfo
+from api import db
+from api.deps import LiveDep, SettingsDep, open_db
+from api.live import LiveStartError
+from api.models import CameraInfo, LiveSession, Run
+from api.routes.videos import mutation_router, run_record
 
 LOGGER = logging.getLogger("queuevision.api")
 router = APIRouter()
@@ -50,3 +53,18 @@ def cameras(settings: SettingsDep) -> list[dict]:
             }
         )
     return out
+
+
+@mutation_router.post("/api/cameras/{camera_id}/live", response_model=Run, status_code=201)
+def start_live(camera_id: str, settings: SettingsDep, live: LiveDep) -> dict:
+    try:
+        video_id = live.start(camera_id)
+    except LiveStartError as error:
+        raise HTTPException(error.status, error.reason) from error
+    with open_db(settings) as conn:
+        return run_record(db.get_video(conn, video_id))
+
+
+@router.get("/api/live", response_model=list[LiveSession])
+def live_sessions(live: LiveDep) -> list[dict]:
+    return live.sessions()
