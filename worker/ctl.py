@@ -33,7 +33,10 @@ def _call(opener: Callable[..., Any], method: str, url: str) -> Any:
         raise CtlError(f"API answered {error.code}{': ' + detail if detail else ''}") from None
     except OSError as error:
         raise CtlError(f"cannot reach the API at {url.split('/api/')[0]} ({type(error).__name__})") from None
-    return json.loads(body) if body else None
+    try:
+        return json.loads(body) if body else None
+    except ValueError:  # json.JSONDecodeError
+        raise CtlError("the API answered with something that is not JSON") from None
 
 
 def _sessions(opener: Callable[..., Any], api: str, camera: str | None) -> list[dict]:
@@ -60,7 +63,7 @@ def main(
             raise CtlError(f"{args.action} needs a camera id")
         if args.action == "start":
             run = _call(opener, "POST", f"{api}/api/cameras/{args.camera}/live")
-            video_id = run["id"]
+            video_id = run["video_id"]
             print(f"video id {video_id}", file=out)
             print(f"Live page: {api}/live?id={video_id}", file=out)
         elif args.action == "stop":
@@ -81,6 +84,9 @@ def main(
                     f"heartbeat {session.get('heartbeat_age_s')} s ago  {api}/live?id={session['video_id']}",
                     file=out,
                 )
+    except (KeyError, TypeError, AttributeError):
+        print("error: unexpected response from the API (contract mismatch)", file=sys.stderr)
+        return 1
     except CtlError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

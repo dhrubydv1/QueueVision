@@ -29,8 +29,10 @@ class Recorder:
     def __init__(self, clock: FakeClock, error: Exception | None = None) -> None:
         self.clock, self.error = clock, error
         self.requests: list[dict] = []
+        self.attempts: list[str] = []  # every request tried, including ones that failed
 
     def __call__(self, request, timeout=None):
+        self.attempts.append(request.full_url.rsplit("/", 1)[1])
         if self.error is not None:
             raise self.error
         body = request.data
@@ -90,7 +92,10 @@ def test_batches_once_per_second_with_progress_and_rows(tmp_path):
     clock = FakeClock()
     rec = Recorder(clock)
     stop = threading.Event()
-    assert run_main(tmp_path, clock, rec, StoppingSource(clock, stop, 3.5), stop) == 0
+    code = run_main(
+        tmp_path, clock, rec, StoppingSource(clock, stop, 3.5), stop, wall=lambda: 1000.0 + clock.now
+    )
+    assert code == 0
     batches = rec.routes("batch")
     assert 3 <= len(batches) <= 5
     assert all(r["headers"]["x-worker-token"] == "tok123" for r in rec.requests)
@@ -98,7 +103,9 @@ def test_batches_once_per_second_with_progress_and_rows(tmp_path):
     assert all(0.95 <= g <= 1.3 for g in gaps[:-1])
     first = batches[0]["json"]
     assert first["progress"]["video_id"] == 7 and first["progress"]["type"] == "progress"
-    assert first["frames_processed"] >= 1 and isinstance(first["captured_at_unix"], float)
+    assert first["frames_processed"] >= 1
+    # capture time is the fake clock at the send, so wall - (now - capture) == wall at the send
+    assert first["captured_at_unix"] == pytest.approx(1000.0 + batches[0]["time"], abs=1e-6)
     seconds = [int(row["time_s"]) for b in batches for row in b["json"]["timeseries"]]
     assert seconds == sorted(set(seconds)) and len(seconds) >= 3  # one row per video second
 
@@ -133,7 +140,8 @@ def test_exits_when_api_unreachable(tmp_path):
     rec = Recorder(clock, error=urllib.error.URLError("refused"))
     code = run_main(tmp_path, clock, rec, ReadySource(clock))
     assert code == 3
-    assert rec.requests == []  # nothing was accepted, and no final message got through
+    assert rec.requests == []  # nothing was accepted
+    assert rec.attempts and "final" not in rec.attempts  # and no final was even tried
     assert 15.0 < clock.now < 16.5
 
 
@@ -150,7 +158,7 @@ def test_unreachable_mid_run_sends_no_final(tmp_path):
 
     source.read_latest = read_latest
     assert run_main(tmp_path, clock, rec, source) == 3
-    assert rec.routes("final") == []
+    assert "final" not in rec.attempts
     assert 17.0 <= clock.now < 19.0
 
 
@@ -164,6 +172,45 @@ def test_sigterm_sends_completed_final(tmp_path):
     assert last["json"]["status"] == "completed" and last["json"]["error"] is None
     assert last["json"]["report"]["stopped_by"] == "operator"
     assert len(rec.routes("final")) == 1
+
+
+def test_leftover_rows_flushed_before_final(tmp_path):
+    clock = FakeClock()
+    rec = Recorder(clock)
+    stop = threading.Event()
+    assert run_main(tmp_path, clock, rec, StoppingSource(clock, stop, 0.5), stop) == 0
+    routes = [r["route"] for r in rec.requests if r["route"] in ("batch", "final")]
+    assert routes == ["batch", "final"]  # no timed batch yet: this one is the flush
+    batch = rec.routes("batch")[0]["json"]
+    assert len(batch["timeseries"]) == 1 and batch["frames_processed"] >= 1
+
+
+def test_sigterm_during_source_open_completes_without_report(tmp_path):
+    clock = FakeClock()
+    rec = Recorder(clock)
+    stop = threading.Event()
+    source = ReadySource(clock)
+    closed: list[int] = []
+    source.close = lambda: closed.append(1)
+    ran: list[int] = []
+
+    def opener(live, env):
+        stop.set()  # SIGTERM while the source is opening
+        return source
+
+    code = main(
+        [*ARGS, str(tmp_path)],
+        ENV,
+        tracker_factory=FakeTracker,
+        source_opener=opener,
+        run_live_fn=lambda *a, **k: ran.append(1),
+        opener=rec,
+        clock=clock,
+        sleep=clock.sleep,
+        stop=stop,
+    )
+    assert code == 0 and ran == [] and closed == [1]
+    assert rec.requests[-1]["json"] == {"status": "completed", "error": None, "report": None}
 
 
 def test_sigterm_during_startup_completes_without_report(tmp_path):
@@ -273,7 +320,7 @@ class FakeApi:
 
 
 def test_ctl_start_prints_live_url():
-    api = FakeApi({("POST", "/api/cameras/cad_seq25/live"): {"id": 12}})
+    api = FakeApi({("POST", "/api/cameras/cad_seq25/live"): {"video_id": 12, "kind": "live"}})
     out = io.StringIO()
     assert ctl.main(["start", "cad_seq25"], opener=api, out=out) == 0
     assert "video id 12" in out.getvalue()
@@ -298,3 +345,14 @@ def test_ctl_stop_status_and_error(capsys):
     assert ("POST", "/api/videos/12/stop") in api.calls
     assert ctl.main(["start", "cad_seq25"], opener=FakeApi({})) == 1
     assert "409" in capsys.readouterr().err
+
+
+def test_ctl_contract_mismatch_prints_error_not_traceback(capsys):
+    api = FakeApi({("POST", "/api/cameras/cad_seq25/live"): {"id": 12}})
+    assert ctl.main(["start", "cad_seq25"], opener=api) == 1
+    assert capsys.readouterr().err.startswith("error:")
+    garbled = FakeApi({("GET", "/api/live"): None})
+    garbled.answers[("GET", "/api/live")] = "not json"
+    garbled_call = lambda request, timeout=None: io.BytesIO(b"<html>")  # noqa: E731
+    assert ctl.main(["status"], opener=garbled_call) == 1
+    assert "error:" in capsys.readouterr().err

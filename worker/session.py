@@ -242,6 +242,9 @@ def _run(args, env, client, tracker_factory, source_opener, run_live_fn, clock, 
         session.heartbeat()  # the model load may have been long: confirm the API is still there
         if client.seconds_since_ok() > UNREACHABLE_AFTER_S:
             return 3
+        if stop.is_set():  # stopped while the source opened: nothing ran, so no report
+            client.final("completed", None, None)
+            return 0
         options = LiveOptions(
             output_dir=args.output_dir,
             process_fps=live.process_fps,
