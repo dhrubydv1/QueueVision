@@ -3,7 +3,8 @@
 Run as ``python -m tests.fake_worker``. ``FAKE_WORKER_MODE`` picks the behaviour:
 ``normal`` (heartbeat, batches with progress, ``completed`` on SIGTERM), ``slow_start`` (heartbeat,
 then a few seconds of pretend model loading that SIGTERM cuts short), ``crash`` (heartbeat, then exit 1
-with no final), ``silent`` (one heartbeat, then nothing until killed) and ``deaf`` (like silent, but
+with no final), ``late_frames`` (one heartbeat with no frames, a silent 1.5 s of pretend model
+loading, then ``normal``), ``silent`` (one heartbeat, then nothing until killed) and ``deaf`` (like silent, but
 ignores SIGTERM). It never prints the environment, and so never an RTSP URL.
 """
 
@@ -46,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
     if mode == "silent":
         time.sleep(60)
         return 0
+    if mode == "late_frames":
+        stop.wait(1.5)
     if mode == "slow_start":
         stop.wait(5.0)
         if stop.is_set():

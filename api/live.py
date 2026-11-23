@@ -54,6 +54,7 @@ class _Session:
     started: float  # supervisor clock at spawn
     last_beat: float | None = None
     frames: int = 0
+    streaming: bool = False  # a heartbeat or batch has reported frames: the startup grace is over
     fps: float = 0.0
     stopping: bool = False
     finished: threading.Event = field(default_factory=threading.Event)
@@ -204,6 +205,8 @@ class LiveSupervisor:
                 return
             session.last_beat = self._clock()
             session.frames = frames_processed
+            if frames_processed > 0:
+                session.streaming = True
             session.fps = processing_fps
             session.beat.set()
 
@@ -351,7 +354,7 @@ class LiveSupervisor:
             if session.proc.poll() is not None:
                 self._end(session, "worker_exited")
                 continue
-            if session.last_beat is None:
+            if not session.streaming:  # model load and source open beat nothing: 60 s from start
                 silent_for = now - session.started - self._startup_grace_s
             else:
                 silent_for = now - session.last_beat - self._heartbeat_timeout_s

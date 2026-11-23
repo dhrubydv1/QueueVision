@@ -544,7 +544,7 @@ While a session runs, uploads can still be submitted but stay `queued`; they sta
 | `failed` | `stream_ended` | The source ended after frames had arrived |
 | `failed` | `engine_error` | An exception in the worker; no traceback or URL is stored |
 | `failed` | `worker_exited` | The worker process ended without sending its final message |
-| `failed` | `no_heartbeat` | No heartbeat for 10 s (60 s are allowed for the first one while the model loads); the worker is killed |
+| `failed` | `no_heartbeat` | No heartbeat for 10 s once frames flow; until a heartbeat or batch reports `frames_processed > 0`, 60 s from start are allowed (model load and source open send no beats); the worker is killed |
 | `failed` | `stop_timeout` | A stop did not finish within 15 s; the worker was killed |
 | `failed` | `worker_start_failed` | See `spawn_failed` |
 

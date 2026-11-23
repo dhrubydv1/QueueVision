@@ -219,7 +219,7 @@ def test_worker_crash_marks_failed(make_server, clip) -> None:
 
 
 def test_silent_worker_marks_failed_and_killed(make_server, clip) -> None:
-    server = make_server("silent", heartbeat_timeout_s=0.6)
+    server = make_server("silent", heartbeat_timeout_s=0.6, startup_grace_s=1.0)
     video_id = server.start_live().json()["video_id"]
     upload_id = queue_upload(server, clip)
     run = server.run(video_id)
@@ -227,6 +227,29 @@ def test_silent_worker_marks_failed_and_killed(make_server, clip) -> None:
     (proc,) = server.live.spawned
     assert proc.wait(timeout=5) is not None  # killed and reaped
     assert server.run(upload_id)["status"] == "completed"  # the hold was released
+
+
+def test_startup_grace_covers_a_silent_model_load(make_server) -> None:
+    # one frames=0 heartbeat, 1.5 s of silence (> heartbeat_timeout_s, < startup_grace_s), then frames
+    server = make_server("late_frames", heartbeat_timeout_s=0.6, startup_grace_s=6.0)
+    video_id = server.start_live().json()["video_id"]
+    deadline = time.time() + WAIT
+    while server.http.get(f"/api/videos/{video_id}").json()["frames_processed"] in (None, 0):
+        assert time.time() < deadline, "no frames arrived"
+        time.sleep(0.05)
+    time.sleep(1.0)  # past the 10 s rule's equivalent: frames are flowing, the run must still be alive
+    assert server.http.post(f"/api/videos/{video_id}/stop").status_code == 200
+    run = server.run(video_id)
+    assert run["status"] == "completed", run
+
+
+def test_no_frames_by_startup_grace_fails_no_heartbeat(make_server) -> None:
+    server = make_server("silent", heartbeat_timeout_s=0.3, startup_grace_s=1.5)
+    video_id = server.start_live().json()["video_id"]
+    started = time.time()
+    run = server.run(video_id)
+    assert run["status"] == "failed" and error_of(run) == "no_heartbeat"
+    assert time.time() - started >= 1.4  # the frames=0 beat did not start the 10 s rule early
 
 
 def test_stop_timeout_kills_and_fails(make_server, clip) -> None:
@@ -299,7 +322,7 @@ def test_shutdown_stops_workers(make_server) -> None:
 
 
 def test_supervisor_end_cleans_up(make_server, clip) -> None:
-    server = make_server("silent", heartbeat_timeout_s=0.5)
+    server = make_server("silent", heartbeat_timeout_s=0.5, startup_grace_s=1.0)
     video_id = server.start_live().json()["video_id"]
     upload_id = queue_upload(server, clip)
     server.app.state.ingest_seq[video_id] = 7

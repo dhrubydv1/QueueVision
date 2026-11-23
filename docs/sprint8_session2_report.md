@@ -137,7 +137,7 @@ change no product code; the script starts the API through its own `--internal-ap
 | Module and file names | `ai_engine/live/capture.py` (sources), `ai_engine/live/loop.py` (`run_live`), `ai_engine/run_messages.py` (message builders shared with the API), `worker/session.py`, `worker/client.py`, `worker/ctl.py`, `api/live.py` (supervisor), `api/routes/ingest.py`. The demo command is `python -m worker.ctl start\|stop\|status [camera] [--api URL]` |
 | Batch encoding | JSON, about one batch per second (`events`, `timeseries`, `progress`, `frames_processed`, `captured_at_unix`, `seq`); the API ignores a `seq` that is not newer than the last one stored (ruling above) |
 | Preview rate and size | At most 5 per second (every 0.2 s), JPEG quality 80, 2 MB limit on both sides (`413`) |
-| Timeouts | HTTP request 5 s; worker exits after 15 s without the API; heartbeat after 2 s with no batch; watchdog 10 s without a heartbeat, 60 s from spawn to the first one (ruling above); stop 15 s before SIGKILL; first frame within 10 s, later frames within 10 s (`camera_unavailable`); a worker that sent its final is killed after 5 s if it has not exited; `max_session_s` default 7200 |
+| Timeouts | HTTP request 5 s; worker exits after 15 s without the API; heartbeat after 2 s with no batch; watchdog 10 s without a heartbeat, 60 s from spawn until a beat reports frames (ruling above); stop 15 s before SIGKILL; first frame within 10 s, later frames within 10 s (`camera_unavailable`); a worker that sent its final is killed after 5 s if it has not exited; `max_session_s` default 7200 |
 | Does `run_live` write a metrics JSON | Yes, `metrics/live<camera>_metrics.json` next to `timeseries/live<camera>_queue.csv`. No image or video in any case (tested) |
 | Fake or real worker in the e2e test | Real worker, real model, looped clip (the test skips if the CAD clip is missing, like the other real-model e2e tests). The supervisor tests use a tiny fake-worker script (`tests/fake_worker.py`) |
 | `process_fps` for a source with unknown fps (webcam) | The clock only: `run_live` takes the newest frame at most `process_fps` times per second and never needs the source's frame rate; a clip is played at its own fps by `LoopedClipSource` |
@@ -173,7 +173,7 @@ Every ruling is from the session ledger (`.superpowers/sdd/2026-11-23-sprint8-se
 
 **Supervisor and runs**
 
-- The watchdog allows the worker 60 s from spawn to its first heartbeat (the spec says only "no heartbeat for 10 s"), because the model loads before any heartbeat and takes seconds on the M1. Cost if wrong: a worker that dies silently at start-up is noticed after 60 s instead of 10 s (a process exit is still caught within 1 s).
+- The watchdog allows the worker 60 s from spawn until the first heartbeat or batch that reports `frames_processed > 0` (the spec says only "no heartbeat for 10 s"), because the model load and the source open send no beats and can take over 10 s on a cold start. After that the 10 s rule applies. Cost if wrong: a worker that hangs silently at start-up is noticed after 60 s instead of 10 s (a process exit is still caught within 1 s, and a stuck camera still ends `camera_unavailable` after 10 s).
 - A stop that ends in SIGKILL (no final message) marks the run `failed` with `stop_timeout`, not `completed`; the spec defines `completed` only for a stop that finishes cleanly. Cost if wrong: an operator stop of a hung worker reads `failed`.
 - Batch dedupe: every worker batch carries an integer `seq` (from 1, +1 per new batch, unchanged on a retry) and the API ignores (204, no writes, no publish) a batch whose `seq` is not newer than the last stored one; a batch without `seq` is still accepted. This fixes the Task 4 minor "a retry after a lost answer can duplicate events and alerts" at its source. Cost if wrong: a small cross-package change inside Task 5.
 
@@ -220,7 +220,6 @@ Every ruling is from the session ledger (`.superpowers/sdd/2026-11-23-sprint8-se
 **Supervisor (Task 6)**
 
 - A late first heartbeat consumes the whole stop budget, so SIGTERM then SIGKILL follow with almost no grace (a stop during a slow model load may end `stop_timeout`).
-- No test for the start-up grace (never-heartbeat) path.
 - `_end` holds the lock across `proc.wait(5)` and database I/O.
 - `shutdown()` sets no closed flag.
 - Cancel on a finished live run returns `409` with the detail `run is not live` (the code is unchanged, the detail differs from an upload's).
