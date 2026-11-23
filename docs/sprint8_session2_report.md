@@ -18,7 +18,7 @@ differs, this report is to be compared with that text, not the other way round.
 - Live results land in the existing tables; the existing Live page and WebSocket work for a live run; a finished
   live run opens on the run page, which says "Live session — no video recorded". Nothing is recorded: no frame or
   video of a live session is written to disk.
-- A 30-minute soak of the looped clip completed (17954 frames); the worker's peak RSS did not rise above the 2-minute runs, but the update time was somewhat slower in the last minute (median 38.8 against 36.3 ms) on a machine whose load had risen. One baseline command, the integration test run alone, failed its frame floor (139 against 150), a known tight margin, unchanged here.
+- A 30-minute soak of the looped clip completed (17954 frames); the worker's peak RSS did not rise above the 2-minute runs, but the update time was somewhat slower in the last minute (median 38.8 against 36.3 ms) on a machine whose load had risen. The integration test's frame floor was flaky (139 against 150 in the first final run) and was fixed in the final review fix wave by polling.
 - Pending, needs a person: drawing the webcam zone, the webcam run with the camera permission, and the real-browser
   check (see "Pending").
 
@@ -60,21 +60,21 @@ Baselines: `outputs/s11_baseline/` and `task-1-report.md` (Task 1 re-ran them on
 
 | Command | Baseline (`outputs/s11_baseline/`) | Final (`outputs/s11_final_commands/`) |
 |---|---|---|
-| `pytest -q` | 576 passed | 663 passed (76 s) |
-| `pytest -q -m "not integration"` | 565 passed, 11 deselected | 651 passed, 12 deselected |
-| `pytest -q -m integration tests/test_live_integration.py` | not a baseline command (new test) | **1 failed**: `assert run["frames_processed"] >= 150` gave `assert 139 >= 150` (`tests/test_live_integration.py:79`, 21.9 s). See below |
+| `pytest -q` | 576 passed | 670 passed (86 s) |
+| `pytest -q -m "not integration"` | 565 passed, 11 deselected | 658 passed, 12 deselected |
+| `pytest -q -m integration tests/test_live_integration.py` | not a baseline command (new test) | 1 passed (21.9 s); the frame floor now polls (see below) |
 | `ruff check .` | clean | clean |
-| `ruff format --check .` | clean, 169 files | clean, 190 files |
+| `ruff format --check .` | clean, 169 files | clean, 191 files |
 | `npm run lint` | clean | clean |
 | `npm run typecheck` | clean | clean |
 | `npm test` | 142 passed | 145 passed (19 files) |
 | `npm run build` | **failed** (Next.js security gate, exit 1) | passes (Next.js 16.4.6, no advisory) |
-| `npm run e2e` (build first) | 14 passed (4.8 min) | 16 passed (4.5 min) |
+| `npm run e2e` (build first) | 14 passed (4.8 min) | 16 passed (4.3 min) |
 
-**The one failing command.** The integration test run on its own failed with 139 frames against a floor of 150. It passed inside the full `pytest -q` run (663 passed, which includes it) and in Task 7's own run. The test sleeps a fixed 20 s that includes the model load, so on a loaded machine (load average 4 to 6 here) it can end short of 150 frames; this is the margin the Task 7 review flagged as a minor (see "Deferred minors"). It was **not** changed in Task 8 and the failure is reported as it happened. The worker processed 139 real frames, completed, and exited; the failing assertion is the frame floor only.
+**The integration test's frame floor (fixed in the final review fix wave).** In the first final run the integration test, run on its own, failed with 139 frames against a floor of 150, because it slept a fixed 20 s that includes the model load. The fix wave changed it to poll `GET /api/videos/{id}` until `frames_processed >= 150` (cap 60 s, floor unchanged). The final run above passes; the standalone repeats of the fix wave are in the section below.
 
-Reading it: the unit count grew by 86 tests (565 to 651), the full count by 87 (576 to 663), and the integration-marked tests went from 11 to 12 (one new,
-`tests/test_live_integration.py`). `ruff format --check` says 169 files at the baseline, where the global constraints said 166; the
+Reading it: the unit count grew by 93 tests (565 to 658), the full count by 94 (576 to 670), and the integration-marked tests went from 11 to 12 (one new,
+`tests/test_live_integration.py`). `ruff format --check` says 169 files at the baseline (191 in the final run), where the global constraints said 166; the
 difference is the number of files, not a failure. e2e: **16 = 8 specs x 2 browsers** (`chromium` and `webkit` projects); the plan
 said 15 and the baseline 14 was 7 specs x 2, so the one new spec adds 2. Vitest 142 to 145 (3 new `RunDetail` tests). The baseline build failed on
 the Next.js security gate; it passes since the upgrade.
@@ -210,7 +210,6 @@ Every ruling is from the session ledger (`.superpowers/sdd/2026-11-23-sprint8-se
 
 **Ingest (Task 5)**
 
-- A straggling timed-out batch can land after the final message (`_store_batch` does not re-check the status; `_store_final` runs outside `_seq_lock`).
 - Batch progress is republished without a type or `video_id` check.
 - A permanently rejected (4xx) batch blocks all later batches in the worker.
 - Tests: the duplicate-seq test does not assert that nothing was published to the WebSocket; the upload-hold test uses a fixed sleep; only the batch route is tested for `403`.
@@ -227,7 +226,6 @@ Every ruling is from the session ledger (`.superpowers/sdd/2026-11-23-sprint8-se
 
 **Dashboard, e2e and integration (Task 7)**
 
-- The integration test's 150-frame floor over a fixed 20 s sleep that includes the model load is tight (wait on `frames_processed` with a cap instead).
 - The teardown `proc.wait(timeout=10)` can mask the original failure.
 - The `RunDetail` "unknown" and "?" fallbacks are untested.
 
@@ -235,3 +233,17 @@ Every ruling is from the session ledger (`.superpowers/sdd/2026-11-23-sprint8-se
 
 - Task 1: no API-level live-row test (carried to Task 6 and covered there). Three other minors are in the task report.
 - Task 2: the `__defaults__` patch in `test_draw_zone` is brittle. Two other minors are in the task report.
+
+## Final review fix wave
+
+Fixes from the whole-branch review (`aba0024..fd1cd69`), each with a failing test first.
+
+1. **Startup grace** (`api/live.py`): the 60 s grace now runs from start until the first heartbeat or batch that reports `frames_processed > 0`; only then does the 10 s rule apply. Tests: `test_startup_grace_covers_a_silent_model_load` (new fake-worker mode `late_frames`) and `test_no_frames_by_startup_grace_fails_no_heartbeat`. `docs/api.md` and `docs/architecture.md` and the ruling above say so.
+2. **Integration frame floor** (`tests/test_live_integration.py`): polls `frames_processed >= 150` with a 60 s cap instead of sleeping 20 s. Standalone runs: see the end of this section.
+3. **Heartbeats while batches fail** (`worker/session.py`): paced from the last accepted batch. Test: `test_heartbeats_continue_while_batches_fail`.
+4. **Final retry** (`worker/session.py`): up to 3 attempts, 0.5 s apart. Tests: `test_final_is_retried_up_to_three_attempts`, `test_final_gives_up_after_three_attempts`.
+5. **Shutdown and the upload hold** (`api/live.py`): `shutdown()` and every end path after it no longer release the hold, so a queued upload cannot start during shutdown; leftovers are failed as interrupted at the next start. Test: `test_upload_queued_during_session_does_not_start_at_shutdown`. `docs/api.md` has the new reason-table row.
+6. **Docs**: the soak worker `ps` RSS range is 94.1 to 126.2 MB (from `soak_cad_seq25_1800s.json`); the `docs/testing_report.md` intro sentence was reworded.
+7. **Straggling batch after final** (`api/routes/ingest.py`): `_store_batch` re-checks `status == 'processing'` inside `_seq_lock` and skips; `_store_final` writes under the same lock. Test: `test_straggling_batch_after_final_stores_nothing`.
+
+Integration test, standalone, three runs after the fix: 1 passed in 22.21 s, 1 passed in 21.20 s, 1 passed in 21.73 s. All final commands were re-run one at a time into `outputs/s11_final_commands/` (table above).
