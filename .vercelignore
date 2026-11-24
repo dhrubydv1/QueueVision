@@ -1,0 +1,21 @@
+# Vercel deploys only the static dashboard (see vercel.json).
+# Keep the Python backend out so Vercel does not detect a Python app or api/*.py functions.
+pyproject.toml
+requirements*.txt
+pytest.ini
+api/
+ai_engine/
+worker/
+tests/
+scripts/
+configs/
+data/
+datasets/
+outputs/
+docs/
+.venv/
+dashboard/node_modules/
+dashboard/out/
+dashboard/.next/
+dashboard/test-results/
+dashboard/playwright-report/
