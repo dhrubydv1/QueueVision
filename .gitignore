@@ -46,3 +46,4 @@ outputs/**
 
 # Local API data (uploads, outputs, SQLite)
 /data/
+.vercel
